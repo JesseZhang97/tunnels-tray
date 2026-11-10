@@ -4,8 +4,8 @@ import Foundation
 public struct Tunnel: Codable, Identifiable, Hashable, Sendable {
     public static let defaultRemoteHost = "127.0.0.1"
     public static let defaultBindAddress = "127.0.0.1"
-    public static let defaultSSHOptions =
-        "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"
+    /// Extra options only; the built-in defaults live in `SSHOptions`.
+    public static let defaultSSHOptions = ""
 
     public var id: UUID
     public var name: String
@@ -133,9 +133,7 @@ public struct TunnelDraft: Equatable, Sendable {
         if bindAddress.trimmingCharacters(in: .whitespaces).contains(where: \.isWhitespace) {
             e.append("Bind address must not contain spaces.")
         }
-        do { _ = try ShellWords.split(sshOptions) } catch {
-            e.append("SSH options: \(error)")
-        }
+        e += SSHOptions.errors(in: sshOptions)
         return e
     }
 

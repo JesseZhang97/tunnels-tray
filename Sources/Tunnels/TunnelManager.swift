@@ -62,7 +62,9 @@ final class TunnelManager: ObservableObject {
 
     private func loadTunnels() {
         do {
-            tunnels = try store.load()
+            let (loaded, migrated) = try store.loadMigrating()
+            tunnels = loaded
+            if migrated { persist() }
         } catch {
             // Keep the unreadable file aside so a later save cannot destroy it.
             let backup = store.url.deletingPathExtension()

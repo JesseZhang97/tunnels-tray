@@ -16,8 +16,13 @@ public struct TunnelStore: Sendable {
 
     /// A missing file means an empty list.
     public func load() throws -> [Tunnel] {
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        return try Self.decode(Data(contentsOf: url))
+        try loadMigrating().tunnels
+    }
+
+    /// Load and report whether any entry was migrated (caller should save).
+    public func loadMigrating() throws -> (tunnels: [Tunnel], migrated: Bool) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return ([], false) }
+        return try Self.decodeMigrating(Data(contentsOf: url))
     }
 
     public func save(_ tunnels: [Tunnel]) throws {
@@ -25,8 +30,24 @@ public struct TunnelStore: Sendable {
         try Self.encode(tunnels).write(to: url, options: .atomic)
     }
 
+    /// Decode and migrate (used for both the store and imports).
     public static func decode(_ data: Data) throws -> [Tunnel] {
-        try JSONDecoder().decode([Tunnel].self, from: data)
+        try decodeMigrating(data).tunnels
+    }
+
+    /// Older files stored the default `-o` options in `ssh_options`; they are
+    /// built in now, so strip them to avoid duplicates.
+    public static func decodeMigrating(_ data: Data) throws -> (tunnels: [Tunnel], migrated: Bool) {
+        var tunnels = try JSONDecoder().decode([Tunnel].self, from: data)
+        var migrated = false
+        for i in tunnels.indices {
+            let stripped = SSHOptions.stripBuiltIns(tunnels[i].sshOptions)
+            if stripped != tunnels[i].sshOptions {
+                tunnels[i].sshOptions = stripped
+                migrated = true
+            }
+        }
+        return (tunnels, migrated)
     }
 
     public static func encode(_ tunnels: [Tunnel]) throws -> Data {

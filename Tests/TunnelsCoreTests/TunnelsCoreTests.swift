@@ -23,23 +23,32 @@ final class ShellWordsTests: XCTestCase {
 }
 
 final class SSHCommandTests: XCTestCase {
+    let base = ["-N", "-T", "-o", "BatchMode=yes",
+                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"]
+
     func testNMcloud() throws {
         let t = Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317)
-        XCTAssertEqual(try SSHCommand.arguments(for: t), [
-            "-N", "-T", "-o", "BatchMode=yes",
-            "-L", "127.0.0.1:18317:127.0.0.1:18317",
-            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
-            "taiwan-nmcloud",
-        ])
+        XCTAssertEqual(try SSHCommand.arguments(for: t),
+                       base + ["-L", "127.0.0.1:18317:127.0.0.1:18317", "taiwan-nmcloud"])
         XCTAssertEqual(SSHCommand.commandLine(for: t),
-            "ssh -N -T -o BatchMode=yes -L 127.0.0.1:18317:127.0.0.1:18317 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes taiwan-nmcloud")
+            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:18317:127.0.0.1:18317 taiwan-nmcloud")
     }
 
-    func testMagpieEmptyBindAndNoOptions() throws {
-        let t = Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430,
-                       bindAddress: "", sshOptions: "")
-        XCTAssertEqual(try SSHCommand.arguments(for: t),
-                       ["-N", "-T", "-o", "BatchMode=yes", "-L", "3430:127.0.0.1:3430", "contabo"])
+    func testMagpieEmptyBind() throws {
+        let t = Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430, bindAddress: "")
+        XCTAssertEqual(try SSHCommand.arguments(for: t), base + ["-L", "3430:127.0.0.1:3430", "contabo"])
+    }
+
+    func testUserOptionOverridesDefault() throws {
+        let t = Tunnel(name: "x", sshHost: "h", localPort: 1, remotePort: 2,
+                       sshOptions: "-o serveraliveinterval=60 -C -o Compression=yes")
+        XCTAssertEqual(try SSHCommand.arguments(for: t), [
+            "-N", "-T", "-o", "BatchMode=yes",
+            "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+            "-L", "127.0.0.1:1:127.0.0.1:2",
+            "-o", "serveraliveinterval=60", "-C", "-o", "Compression=yes",
+            "h",
+        ])
     }
 
     func testIPv6() {
@@ -105,7 +114,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(t.localPort, 3430)
         XCTAssertEqual(t.remoteHost, "127.0.0.1")
         XCTAssertEqual(t.bindAddress, "127.0.0.1")
-        XCTAssertEqual(t.sshOptions, Tunnel.defaultSSHOptions)
+        XCTAssertEqual(t.sshOptions, "")
     }
 
     func testEncodeUsesSnakeCaseAndRoundTrips() throws {
@@ -162,5 +171,63 @@ final class PortCheckTests: XCTestCase {
         XCTAssertFalse(PortCheck.isFree(bindAddress: "", port: port))
         close(fd)
         XCTAssertTrue(PortCheck.isFree(bindAddress: "127.0.0.1", port: port))
+    }
+}
+
+final class SSHOptionsTests: XCTestCase {
+    private func pairs(_ p: SSHOptions.Parsed) -> [[String]] { p.options.map { [$0.key, $0.value] } }
+
+    func testParseForms() throws {
+        let p = try SSHOptions.parse("-o compression=yes -oConnectTimeout=5 -o 'IPQoS af21 cs1' -o \"User = bob\" -C -i ~/.ssh/k")
+        XCTAssertEqual(pairs(p), [["Compression", "yes"], ["ConnectTimeout", "5"], ["IPQoS", "af21 cs1"], ["User", "bob"]])
+        XCTAssertEqual(p.extras, ["-C", "-i", "~/.ssh/k"])
+        XCTAssertThrowsError(try SSHOptions.parse("-o"))
+    }
+
+    func testGenerateRoundTrip() throws {
+        let options = [SSHOption(key: "IPQoS", value: "af21 cs1"), SSHOption(key: "IdentityFile", value: "~/My Keys/id"),
+                       SSHOption(key: "Custom", value: "it's")]
+        let text = SSHOptions.generate(options, extras: ["-C"])
+        XCTAssertEqual(text, "-o 'IPQoS=af21 cs1' -o 'IdentityFile=~/My Keys/id' -o 'Custom=it'\\''s' -C")
+        let back = try SSHOptions.parse(text)
+        XCTAssertEqual(pairs(back), options.map { [$0.key, $0.value] })
+        XCTAssertEqual(back.extras, ["-C"])
+        XCTAssertEqual(SSHOptions.generate(back.options, extras: back.extras), text)
+        XCTAssertEqual(SSHOptions.generate([]), "")
+    }
+
+    func testErrors() {
+        XCTAssertEqual(SSHOptions.errors(in: "-o ConnectTimeout=5 -o Compression=no -C"), [])
+        XCTAssertEqual(SSHOptions.errors(in: "-o ConnectTimeout=abc"), ["ConnectTimeout must be a number."])
+        XCTAssertEqual(SSHOptions.errors(in: "-o Compression=maybe"), ["Compression must be yes or no."])
+        XCTAssertEqual(SSHOptions.errors(in: "-o User="), ["User needs a value."])
+        XCTAssertEqual(SSHOptions.errors(in: "-o =x"), ["Option key is required."])
+        XCTAssertEqual(SSHOptions.errors(in: "-o LogLevel=verbose"), [])
+        XCTAssertFalse(SSHOptions.errors(in: "-o 'x").isEmpty)
+    }
+
+    func testStripBuiltIns() {
+        XCTAssertEqual(SSHOptions.stripBuiltIns("-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"), "")
+        XCTAssertEqual(SSHOptions.stripBuiltIns("-N -T -o BatchMode=yes -oserveraliveinterval=15 -o Compression=yes"),
+                       "-o Compression=yes")
+        // A different value is the user's choice and stays.
+        XCTAssertEqual(SSHOptions.stripBuiltIns("-o ServerAliveInterval=60 -o ExitOnForwardFailure=yes"),
+                       "-o ServerAliveInterval=60")
+        // Nothing to strip: text is returned untouched.
+        XCTAssertEqual(SSHOptions.stripBuiltIns("-C   -o User=x"), "-C   -o User=x")
+        XCTAssertEqual(SSHOptions.stripBuiltIns("-o 'broken"), "-o 'broken")
+    }
+
+    func testStoreMigration() throws {
+        let json = #"""
+        [{"name":"NMcloud","ssh_host":"taiwan-nmcloud","local_port":18317,"remote_port":18317,
+          "ssh_options":"-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"},
+         {"name":"magpie","ssh_host":"contabo","local_port":3430,"remote_port":3430,"ssh_options":""}]
+        """#
+        let (tunnels, migrated) = try TunnelStore.decodeMigrating(Data(json.utf8))
+        XCTAssertTrue(migrated)
+        XCTAssertEqual(tunnels.map(\.sshOptions), ["", ""])
+        let (_, again) = try TunnelStore.decodeMigrating(TunnelStore.encode(tunnels))
+        XCTAssertFalse(again)
     }
 }

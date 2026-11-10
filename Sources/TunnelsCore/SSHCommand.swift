@@ -1,7 +1,8 @@
 import Foundation
 
 /// Builds the ssh invocation for a tunnel:
-/// `/usr/bin/ssh -N -T -o BatchMode=yes -L bind:local:remote_host:remote_port <options> ssh_host`
+/// `/usr/bin/ssh -N -T -o BatchMode=yes -o <defaults not set by the tunnel>
+///  -L bind:local:remote_host:remote_port <extra options> ssh_host`
 public enum SSHCommand {
     public static let executable = "/usr/bin/ssh"
 
@@ -17,15 +18,18 @@ public enum SSHCommand {
     }
 
     public static func arguments(for t: Tunnel) throws -> [String] {
-        ["-N", "-T", "-o", "BatchMode=yes", "-L", forwardSpec(for: t)]
-            + (try ShellWords.split(t.sshOptions))
-            + [t.sshHost]
+        let extras = try ShellWords.split(t.sshOptions)
+        let userKeys = SSHOptions.userKeys(in: t.sshOptions)
+        let defaults = SSHOptions.defaultOptions
+            .filter { !userKeys.contains($0.key.lowercased()) }
+            .flatMap { ["-o", "\($0.key)=\($0.value)"] }
+        return SSHOptions.fixedArguments + defaults + ["-L", forwardSpec(for: t)] + extras + [t.sshHost]
     }
 
     /// Copy-pasteable command line.
     public static func commandLine(for t: Tunnel) -> String {
         guard let args = try? arguments(for: t) else {
-            return "ssh -N -T -o BatchMode=yes -L \(forwardSpec(for: t)) \(t.sshOptions) \(t.sshHost)"
+            return "ssh \(SSHOptions.baseDescription) -L \(forwardSpec(for: t)) \(t.sshOptions) \(t.sshHost)"
         }
         return "ssh " + ShellWords.join(args)
     }
