@@ -26,17 +26,17 @@ final class SSHCommandTests: XCTestCase {
     let base = ["-N", "-T", "-o", "BatchMode=yes",
                 "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"]
 
-    func testNMcloud() throws {
-        let t = Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317)
+    func testDefaultCommand() throws {
+        let t = Tunnel(name: "My Web App", sshHost: "my-server", localPort: 8080, remotePort: 8080)
         XCTAssertEqual(try SSHCommand.arguments(for: t),
-                       base + ["-L", "127.0.0.1:18317:127.0.0.1:18317", "taiwan-nmcloud"])
+                       base + ["-L", "127.0.0.1:8080:127.0.0.1:8080", "my-server"])
         XCTAssertEqual(SSHCommand.commandLine(for: t),
-            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:18317:127.0.0.1:18317 taiwan-nmcloud")
+            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 my-server")
     }
 
-    func testMagpieEmptyBind() throws {
-        let t = Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430, bindAddress: "")
-        XCTAssertEqual(try SSHCommand.arguments(for: t), base + ["-L", "3430:127.0.0.1:3430", "contabo"])
+    func testEmptyBind() throws {
+        let t = Tunnel(name: "Grafana", sshHost: "example-host", localPort: 3000, remotePort: 3000, bindAddress: "")
+        XCTAssertEqual(try SSHCommand.arguments(for: t), base + ["-L", "3000:127.0.0.1:3000", "example-host"])
     }
 
     func testUserOptionOverridesDefault() throws {
@@ -60,8 +60,8 @@ final class SSHCommandTests: XCTestCase {
     func testBrowserHost() {
         var t = Tunnel(name: "a", sshHost: "h", localPort: 1, remotePort: 1, bindAddress: "0.0.0.0")
         XCTAssertEqual(t.browserURL?.absoluteString, "http://127.0.0.1:1")
-        t.bindAddress = "192.168.1.5"
-        XCTAssertEqual(t.browserURL?.absoluteString, "http://192.168.1.5:1")
+        t.bindAddress = "10.0.0.7"
+        XCTAssertEqual(t.browserURL?.absoluteString, "http://10.0.0.7:1")
     }
 }
 
@@ -70,23 +70,23 @@ final class SSHConfigTests: XCTestCase {
         let text = """
         # comment
         Include extra/*
-        Host 192.168.5.172
-          HostName 192.168.5.172
+        Host 10.0.0.5
+          HostName 10.0.0.5
         Host github github.com
             HostName ssh.github.com
         Host *
             ServerAliveInterval 30
         Host *.internal !bad prod-?
         host=lower-equals
-        HOST   "quoted name" contabo
+        HOST   "quoted name" example-host
         Match host foo
-        Host contabo
+        Host example-host
         """
         let hosts = SSHConfig.hosts(in: text) { pattern in
-            pattern == "extra/*" ? ["Host colima\n  HostName 127.0.0.1\nInclude loop"] : []
+            pattern == "extra/*" ? ["Host included-host\n  HostName 127.0.0.1\nInclude loop"] : []
         }
-        XCTAssertEqual(hosts, ["colima", "192.168.5.172", "github", "github.com",
-                               "lower-equals", "quoted name", "contabo"])
+        XCTAssertEqual(hosts, ["included-host", "10.0.0.5", "github", "github.com",
+                               "lower-equals", "quoted name", "example-host"])
     }
 
     func testIncludeRecursionIsBounded() {
@@ -109,16 +109,16 @@ final class SSHConfigTests: XCTestCase {
 
 final class ModelTests: XCTestCase {
     func testDecodeDefaultsAndStringPorts() throws {
-        let json = #"[{"name":"magpie","ssh_host":"contabo","local_port":"3430","remote_port":3430}]"#
+        let json = #"[{"name":"Grafana","ssh_host":"example-host","local_port":"3000","remote_port":3000}]"#
         let t = try XCTUnwrap(TunnelStore.decode(Data(json.utf8)).first)
-        XCTAssertEqual(t.localPort, 3430)
+        XCTAssertEqual(t.localPort, 3000)
         XCTAssertEqual(t.remoteHost, "127.0.0.1")
         XCTAssertEqual(t.bindAddress, "127.0.0.1")
         XCTAssertEqual(t.sshOptions, "")
     }
 
     func testEncodeUsesSnakeCaseAndRoundTrips() throws {
-        let t = Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317, note: "n")
+        let t = Tunnel(name: "My Web App", sshHost: "my-server", localPort: 8080, remotePort: 8080, note: "n")
         let data = try TunnelStore.encode([t])
         let text = String(decoding: data, as: UTF8.self)
         for key in ["ssh_host", "local_port", "remote_host", "remote_port", "bind_address", "ssh_options", "note"] {
@@ -223,9 +223,9 @@ final class SSHOptionsTests: XCTestCase {
 
     func testStoreMigration() throws {
         let json = #"""
-        [{"name":"NMcloud","ssh_host":"taiwan-nmcloud","local_port":18317,"remote_port":18317,
+        [{"name":"My Web App","ssh_host":"my-server","local_port":8080,"remote_port":8080,
           "ssh_options":"-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"},
-         {"name":"magpie","ssh_host":"contabo","local_port":3430,"remote_port":3430,"ssh_options":""}]
+         {"name":"Grafana","ssh_host":"example-host","local_port":3000,"remote_port":3000,"ssh_options":""}]
         """#
         let (tunnels, migrated) = try TunnelStore.decodeMigrating(Data(json.utf8))
         XCTAssertTrue(migrated)
@@ -239,19 +239,19 @@ final class ConnectionTestTests: XCTestCase {
     let defaults = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"]
 
     func testLoginArguments() throws {
-        let t = Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317)
+        let t = Tunnel(name: "My Web App", sshHost: "my-server", localPort: 8080, remotePort: 8080)
         XCTAssertEqual(try ConnectionTest.loginArguments(for: t),
-                       ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"] + defaults + ["taiwan-nmcloud", "exit"])
+                       ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"] + defaults + ["my-server", "exit"])
     }
 
     func testReachArgumentsWithUserOverrides() throws {
-        let t = Tunnel(name: "x", sshHost: "contabo", localPort: 3430, remoteHost: "::1", remotePort: 3430,
+        let t = Tunnel(name: "x", sshHost: "example-host", localPort: 3000, remoteHost: "::1", remotePort: 3000,
                        sshOptions: "-o connecttimeout=3 -o ServerAliveInterval=60 -C")
         XCTAssertEqual(try ConnectionTest.reachArguments(for: t), [
             "-o", "BatchMode=yes",
             "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
             "-o", "connecttimeout=3", "-o", "ServerAliveInterval=60", "-C",
-            "-W", "[::1]:3430", "contabo",
+            "-W", "[::1]:3000", "example-host",
         ])
     }
 
@@ -291,28 +291,62 @@ final class ConnectionTestTests: XCTestCase {
     }
 }
 
-/// Real ssh checks against Jesse's hosts. Run with: TUNNELS_LIVE=1 swift test --filter LiveConnectionTests
+/// Live checks against a real host. Nothing is hard-coded; set:
+///   TUNNELS_LIVE=1 TUNNELS_LIVE_HOST=<Host from ~/.ssh/config> TUNNELS_LIVE_PORT=<open remote port>
+///   swift test --filter Live
+private struct LiveConfig {
+    let host: String
+    let port: Int
+
+    static func load() throws -> LiveConfig {
+        let env = ProcessInfo.processInfo.environment
+        guard env["TUNNELS_LIVE"] == "1", let host = env["TUNNELS_LIVE_HOST"], !host.isEmpty,
+              let port = env["TUNNELS_LIVE_PORT"].flatMap(Int.init) else {
+            throw XCTSkip("set TUNNELS_LIVE=1, TUNNELS_LIVE_HOST and TUNNELS_LIVE_PORT")
+        }
+        return LiveConfig(host: host, port: port)
+    }
+}
+
+/// A local port that is free right now.
+private func freeLocalPort() -> Int {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    defer { close(fd) }
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    _ = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, len) } }
+    _ = withUnsafeMutablePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) } }
+    return Int(UInt16(bigEndian: addr.sin_port))
+}
+
 final class LiveConnectionTests: XCTestCase {
-    func testLiveHosts() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["TUNNELS_LIVE"] == "1", "set TUNNELS_LIVE=1")
+    func testLiveConnectionTest() async throws {
+        let cfg = try LiveConfig.load()
         let cases = [
-            Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317),
-            Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430, bindAddress: ""),
-            Tunnel(name: "closed-port", sshHost: "contabo", localPort: 3431, remotePort: 1, bindAddress: ""),
-            Tunnel(name: "bogus-host", sshHost: "no-such-host.invalid", localPort: 3432, remotePort: 80),
+            Tunnel(name: "open-port", sshHost: cfg.host, localPort: freeLocalPort(), remotePort: cfg.port),
+            Tunnel(name: "closed-port", sshHost: cfg.host, localPort: freeLocalPort(), remotePort: 1),
+            Tunnel(name: "bogus-host", sshHost: "no-such-host.invalid", localPort: freeLocalPort(), remotePort: 80),
         ]
+        var results: [String: [ConnectionTest.Step]] = [:]
         for t in cases {
             let start = Date()
             let steps = await ConnectionTest.run(t)
+            results[t.name] = steps
             print("LIVE \(t.name) (\(String(format: "%.1f", Date().timeIntervalSince(start)))s):")
             for s in steps { print("LIVE   \(s.kind.title): \(s.state)") }
         }
+        func passed(_ s: ConnectionTest.Step) -> Bool { if case .passed = s.state { return true }; return false }
+        XCTAssertTrue(results["open-port"]!.allSatisfy(passed))
+        XCTAssertFalse(passed(results["closed-port"]![2]))
+        XCTAssertFalse(passed(results["bogus-host"]![1]))
     }
 }
 
 /// Auto-connect path used by "open in browser": start the real ssh forward and
 /// wait until the local port accepts connections. No browser is opened.
-/// Run with: TUNNELS_LIVE=1 swift test --filter LiveAutoConnectTests
 final class LiveAutoConnectTests: XCTestCase {
     private func startAndWait(_ t: Tunnel, timeout: TimeInterval = 15) throws -> (accepted: Bool, seconds: Double, stderr: String) {
         let p = Process()
@@ -342,14 +376,13 @@ final class LiveAutoConnectTests: XCTestCase {
     }
 
     func testLiveAutoConnect() throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["TUNNELS_LIVE"] == "1", "set TUNNELS_LIVE=1")
-        let magpie = Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430, bindAddress: "")
-        XCTAssertTrue(PortCheck.isFree(bindAddress: "", port: 3430), "port 3430 must be free before the test")
-        let ok = try startAndWait(magpie)
-        print("LIVE magpie accepted=\(ok.accepted) after \(String(format: "%.1f", ok.seconds))s \(ok.stderr)")
+        let cfg = try LiveConfig.load()
+        let good = Tunnel(name: "live", sshHost: cfg.host, localPort: freeLocalPort(), remotePort: cfg.port)
+        let ok = try startAndWait(good)
+        print("LIVE auto-connect accepted=\(ok.accepted) after \(String(format: "%.1f", ok.seconds))s \(ok.stderr)")
         XCTAssertTrue(ok.accepted)
 
-        let bogus = Tunnel(name: "bogus", sshHost: "no-such-host.invalid", localPort: 3433, remotePort: 80)
+        let bogus = Tunnel(name: "bogus", sshHost: "no-such-host.invalid", localPort: freeLocalPort(), remotePort: 80)
         let bad = try startAndWait(bogus)
         print("LIVE bogus accepted=\(bad.accepted) after \(String(format: "%.1f", bad.seconds))s stderr=\(bad.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         XCTAssertFalse(bad.accepted)
