@@ -1,135 +1,170 @@
 # Tunnels
 
-macOS 菜单栏小工具，用来管理 SSH 本地端口转发（`ssh -L`）。每条隧道一行，点一下就在浏览器打开对应页面。
+A small macOS menu bar app to manage SSH local port forwards (`ssh -L`).
+Keep all your "web UI behind an SSH tunnel" services in one list, start them
+with one click, and open them in the browser.
 
-- 原生 Swift / SwiftUI（`MenuBarExtra`），只用系统框架，无第三方依赖。
-- 要求 macOS 14+，Xcode 或 Command Line Tools（Swift 5.9+）。
+Native Swift / SwiftUI (`MenuBarExtra`), system frameworks only, no dependencies.
 
-## 构建与运行
+<p>
+  <img src="docs/screenshots/popover-light.png" width="360" alt="Tunnel list (light)">
+  <img src="docs/screenshots/popover-dark.png" width="360" alt="Tunnel list (dark)">
+</p>
+
+## Features
+
+- **Menu bar list** of tunnels with status: Connected (green), Connecting / Reconnecting (yellow),
+  Stopped (gray), Error (red, with the reason on a red line).
+- **Menu bar count**: the icon shows how many tunnels are connected
+  (<img src="docs/screenshots/menubar-light.png" height="18" alt="menu bar icon with count">); can be turned off in Settings.
+- **Hover actions** per row: open in browser, start/stop, copy the ssh command, edit, delete (inline confirm).
+- **Open in browser auto-connects**: if the tunnel is not up yet, it is started and the page opens
+  as soon as the local port accepts connections (up to 15 s).
+- **"All" switch** to start or stop every tunnel.
+- **Auto-reconnect** on unexpected exit with backoff 1, 2, 4 … 30 s. A manual stop never reconnects.
+- **Port check** before start: if the local port is taken, the row shows which process holds it.
+- **Friendly SSH options editor**: pick common `ssh_config` keys (User, Port, IdentityFile, ProxyJump,
+  Compression, ConnectTimeout, StrictHostKeyChecking, LogLevel, IPQoS, …) with proper controls,
+  or a custom key; an "Advanced: raw" view edits the `-o Key=Value` text directly.
+- **SSH host picker** filled from `~/.ssh/config` (wildcards skipped, `Include` followed).
+- **Test connection** in the add/edit form, using the unsaved values: local port free, SSH login,
+  remote target reachable.
+- **Import / export** the tunnel list as JSON.
+- Nothing starts automatically on launch, and there is no launch-at-login.
+  Quitting (or SIGTERM/SIGINT/SIGHUP) stops all ssh child processes.
+
+<p>
+  <img src="docs/screenshots/form-light.png" width="420" alt="Edit tunnel form">
+  <img src="docs/screenshots/settings-dark.png" width="400" alt="Settings (dark)">
+</p>
+
+## Requirements
+
+- macOS 14 or later
+- Xcode or the Command Line Tools with Swift 5.9 or later
+- Key-based SSH login (keys or ssh-agent). Tunnels run with `BatchMode=yes`, so ssh never asks for a
+  password or a host-key confirmation. Connect once with `ssh <host>` in Terminal to accept a new host key.
+
+## Build and run
 
 ```bash
-./scripts/bundle.sh          # swift build -c release，生成 build/Tunnels.app（ad-hoc 签名）
+git clone https://github.com/JesseZhang97/tunnels-tray.git
+cd tunnels-tray
+./scripts/bundle.sh        # swift build -c release, then builds build/Tunnels.app (ad-hoc signed)
 open build/Tunnels.app
 ```
 
-可选：把 `build/Tunnels.app` 拖进 `/Applications`。
+Optionally drag `build/Tunnels.app` to `/Applications`.
 
-测试（命令拼装、shell 分词、~/.ssh/config 解析、JSON、端口检测）：
+Tests:
 
 ```bash
 swift test
 ```
 
-## 每条隧道的字段
-
-| 字段 | 说明 | 默认值 |
-|---|---|---|
-| Name | 显示名 | 必填 |
-| SSH host | `~/.ssh/config` 里的 Host，表单里可下拉选择，也可手填 | 必填 |
-| Local port | 本地端口 1–65535 | 必填 |
-| Remote host | 远端目标主机 | `127.0.0.1` |
-| Remote port | 远端端口 1–65535 | 必填 |
-| Bind address | 本地监听地址，留空则用 ssh 默认（localhost） | `127.0.0.1` |
-| SSH options | 只放额外参数。表单里用选项列表编辑（选 Key，再填值），也可以展开 "Advanced: raw" 直接改文本 | 空 |
-| Note | 备注 | 空 |
-
-实际执行的命令：
-
-```
-/usr/bin/ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
-    -L <bind>:<local>:<remote_host>:<remote_port> <SSH options> <SSH host>
-```
-
-`-N -T -o BatchMode=yes` 和三个默认 `-o` 选项每条隧道都会加，不用单独配置。如果某条隧道在 SSH options 里设了同名的 Key（例如 `ServerAliveInterval=60`），就用它的值，不再加默认值。
-
-SSH options 编辑器里的常用 Key：User、Port、IdentityFile（可选文件）、IdentitiesOnly、ProxyJump（可从 ~/.ssh/config 选）、Compression、ConnectTimeout、ServerAliveInterval、ServerAliveCountMax、ExitOnForwardFailure、TCPKeepAlive、StrictHostKeyChecking、LogLevel、IPQoS、AddressFamily、GatewayPorts、ForwardAgent、HostKeyAlias，以及 "Custom…"（自定义 Key 和值）。不是 `-o` 形式的参数（例如 `-C`）原样保留，在 raw 里编辑。
-
-例子：
-
-- NMcloud：SSH host `taiwan-nmcloud`，端口 18317 → 18317，其余用默认值，SSH options 留空。
-- magpie：SSH host `contabo`，端口 3430 → 3430，Bind address 留空，SSH options 留空（会额外带上默认选项）。
-
-## 行为
-
-- App 启动时不自动开启任何隧道，全部手动启动；不做开机自启。
-- `BatchMode=yes`：只支持密钥 / ssh-agent 登录，不会弹出密码或 host key 确认。第一次连新主机，先在终端里 `ssh <host>` 一次，接受 host key。
-- 启动前先检测本地端口能否绑定。被占用时状态变红，并显示占用进程（通过 `lsof`）。
-- 状态：绿色 = 已连接（ssh 存活超过 2 秒且端口在监听）；黄色 = 连接中或重连中；灰色 = 已停止；红色 = 出错。
-- 意外断开会自动重连，等待 1、2、4、8… 秒，最长 30 秒；连接保持超过 30 秒后重置退避。手动停止不会重连。
-- 点 Quit 或 App 收到 SIGTERM / SIGINT / SIGHUP 时，会结束所有 ssh 子进程。
-
-## 界面
-
-- 顶部：标题 Tunnels，右边 All 开关一键启动或停止全部。
-- 每行：状态点、名字和状态文字（Connected / Connecting… / Reconnecting… / Stopped / Error），下面一行灰字 `localhost:18317 → ssh_host → remote_host:remote_port`（bind 不是本机回环时显示 bind 地址）。
-- 行内出错或重连时，在副标题下用一行红字显示最近一次错误（过长会截断，鼠标停留可看全文）。点行本身没有动作。
-- 鼠标悬停：在浏览器打开 `http://<bind>:<local_port>`（bind 为 `0.0.0.0`、`*` 或空时用 `127.0.0.1`；隧道没连上时会先自动启动，等到连上且端口能连通再打开，最多等 15 秒，超时或出错不打开并在行内显示原因，等待时按钮变成转圈，点 Stop 会取消）、启动/停止、复制 ssh 命令、编辑、删除（删除要在行内再点一次红色 Delete 确认）。
-- 菜单栏：图标后面显示已连接的隧道数，0 条时只显示图标；可在 Settings 里关掉 "Show connection count in menu bar"（默认开）。
-- 底部：+ Add、Settings（显示连接数开关、导入/导出 JSON、在 Finder 中显示、重新读取 ~/.ssh/config）、Quit。
-
-## Test connection
-
-添加和编辑表单里有 "Test connection" 按钮，用表单里当前（未保存）的值检查三项，不影响正在运行的隧道，总时长约 12 秒，可以点 Stop 取消：
-
-1. Local port free：本地端口能否绑定。编辑一条正在运行的隧道且端口没改时，显示 "In use by this tunnel"，算通过。
-2. SSH login：`ssh -T -o BatchMode=yes -o ConnectTimeout=8 <默认选项> <额外选项> <host> exit`，退出码 0 算通过，否则显示 ssh 的报错。
-3. Remote target reachable：第 2 项通过后才做。`ssh <同样的选项> -W remote_host:remote_port <host>`，在 ssh 握手（按第 2 项登录耗时估算）之后再过 2 秒仍在运行且没有 open failed / connect failed / administratively prohibited，就算可达。
-
-在真实主机上跑检查（不经过界面）：
+Live tests against a real host are skipped unless you set:
 
 ```bash
-TUNNELS_LIVE=1 swift test --filter LiveConnectionTests
+TUNNELS_LIVE=1 TUNNELS_LIVE_HOST=my-server TUNNELS_LIVE_PORT=8080 swift test --filter Live
 ```
 
-## 配置文件
+Regenerate the screenshots (renders the real views with demo data into offscreen windows):
 
-`~/Library/Application Support/Tunnels/tunnels.json`，是一个 JSON 数组，键名用 snake_case：
+```bash
+swift build && .build/debug/Tunnels --snapshot docs/screenshots
+```
+
+## Usage
+
+Click **+ Add** and fill in:
+
+| Field | Meaning | Default |
+|---|---|---|
+| Name | Display name | required |
+| SSH host | A `Host` from `~/.ssh/config` (pick from the list) or any host ssh accepts | required |
+| Local port | Port on this Mac, 1–65535 | required |
+| Remote host | Target host as seen from the SSH server | `127.0.0.1` |
+| Remote port | Target port, 1–65535 | required |
+| Bind address | Local listen address; empty lets ssh decide (localhost) | `127.0.0.1` |
+| SSH options | Extra options only (see below) | empty |
+| Note | Free text | empty |
+
+Each tunnel runs:
+
+```
+/usr/bin/ssh -N -T -o BatchMode=yes \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+    -L <bind>:<local port>:<remote host>:<remote port> <extra options> <ssh host>
+```
+
+`-N -T -o BatchMode=yes` and the three default `-o` options are always added. If a tunnel sets one of the
+default keys itself (for example `ServerAliveInterval=60`), its value is used and the default is left out.
+
+**Test connection** checks, with a 12 s budget and a Stop button:
+
+1. *Local port free* – the local port can be bound (a running tunnel being edited counts as OK).
+2. *SSH login* – `ssh -T -o BatchMode=yes -o ConnectTimeout=8 <options> <host> exit` exits 0.
+3. *Remote target reachable* – `ssh <options> -W <remote host>:<remote port> <host>` stays up past its
+   handshake without "open failed" / "connect failed" / "administratively prohibited".
+
+## Configuration file
+
+`~/Library/Application Support/Tunnels/tunnels.json`, a JSON array:
 
 ```json
 [
   {
-    "id": "6F1C…",
-    "name": "NMcloud",
-    "ssh_host": "taiwan-nmcloud",
-    "local_port": 18317,
+    "id": "3F2B8C1E-4D5A-4B6C-9E7F-0A1B2C3D4E5F",
+    "name": "My Web App",
+    "ssh_host": "my-server",
+    "local_port": 8080,
     "remote_host": "127.0.0.1",
-    "remote_port": 18317,
+    "remote_port": 8080,
     "bind_address": "127.0.0.1",
-    "ssh_options": "",
-    "note": ""
+    "ssh_options": "-o User=deploy -o Compression=yes",
+    "note": "Admin dashboard"
   }
 ]
 ```
 
-手写导入时 `id` 可省略，`remote_host`、`bind_address`、`ssh_options`、`note` 省略时用默认值，端口也可以写成字符串。导入时同 `id` 的条目会被替换，其余追加。旧版本把默认选项写在 `ssh_options` 里，读取时会自动去掉与内置默认值完全相同的项（以及 `-N`、`-T`），并写回文件。文件读不出来时，App 会把它改名为 `tunnels.corrupt-<时间戳>.json` 保留，不会覆盖。
+When importing hand-written JSON, `id` may be omitted; `remote_host`, `bind_address`, `ssh_options` and
+`note` fall back to their defaults; ports may be strings. Imported entries with an existing `id` replace it,
+others are appended. Files from older versions that stored the default options in `ssh_options` are
+cleaned up on load. An unreadable file is renamed to `tunnels.corrupt-<timestamp>.json` and never overwritten.
 
-## 代码结构
+## Project layout
 
 ```
-Sources/TunnelsCore/   纯逻辑，可测试
-  Tunnel.swift         数据模型、表单草稿与校验
-  ShellWords.swift     shell 风格分词与转义
-  SSHCommand.swift     拼装 ssh 参数和可复制的命令行
-  SSHOptions.swift     -o 选项的解析/生成/校验、内置默认值、迁移
-  SSHConfig.swift      解析 ~/.ssh/config 的 Host（跳过通配符，跟随 Include）
-  TunnelStore.swift    JSON 读写
-  PortCheck.swift      bind 检测端口是否空闲
-  ConnectionTest.swift 连接测试（命令拼装、结果判断、带超时的进程运行）
-Sources/Tunnels/       App
-  TunnelsApp.swift     MenuBarExtra 入口、退出和信号处理
-  TunnelManager.swift  ssh 子进程、状态、自动重连
-  PopoverView.swift    弹窗
-  TunnelRow.swift      每一行
-  TunnelFormView.swift 添加/编辑表单
-  SSHOptionsEditor.swift SSH options 结构化编辑器
-  SettingsView.swift   设置窗口
-  Windows.swift        打开普通 NSWindow
-scripts/bundle.sh      打包 .app
-Support/Info.plist     LSUIElement=true，com.jesse.tunnels
+Sources/TunnelsCore/     Testable logic
+  Tunnel.swift           Model, form draft and validation
+  ShellWords.swift       Shell-style splitting and quoting
+  SSHCommand.swift       ssh arguments and copyable command line
+  SSHOptions.swift       -o option parsing/generation/validation, built-in defaults, migration
+  SSHConfig.swift        Host names from ~/.ssh/config
+  TunnelStore.swift      JSON storage
+  PortCheck.swift        Bind / connect checks
+  ConnectionTest.swift   Test connection steps and process runner
+Sources/Tunnels/         The app (SwiftUI views, TunnelManager, snapshot renderer)
+scripts/bundle.sh        Builds Tunnels.app
+Support/Info.plist       LSUIElement app, bundle id com.jesse.tunnels
 ```
 
-## 已知限制
+## Known limitations
 
-- App 被强制杀掉（`kill -9`）或崩溃时，ssh 子进程会残留，需要手动结束。
-- Bind address 写主机名（不是 IP）时跳过端口预检，交给 ssh 判断。
-- `~/.ssh/config` 里的 `Match` 块不解析。
+- If the app is force-killed (`kill -9`) or crashes, ssh child processes are left running.
+- A bind address given as a hostname (not an IP) skips the local port pre-check.
+- `Match` blocks in `~/.ssh/config` are not evaluated.
+- Password or interactive (2FA) logins are not supported.
+- The app is ad-hoc signed, not notarized; macOS may ask you to confirm the first launch.
+
+## 中文说明
+
+Tunnels 是一个 macOS 菜单栏工具，用来管理 SSH 本地端口转发。在弹窗里添加隧道（名字、`~/.ssh/config` 里的
+Host、本地端口、远端地址和端口），一键启动或停止；点"打开"按钮时，没连上会先自动建立连接，再在浏览器打开页面。
+意外断开会自动重连。表单里可以用列表方式添加常用 SSH 选项，并用 "Test connection" 检查本地端口、SSH 登录和
+远端目标。构建：`./scripts/bundle.sh`，然后 `open build/Tunnels.app`。配置文件在
+`~/Library/Application Support/Tunnels/tunnels.json`。
+
+## License
+
+MIT, see [LICENSE](LICENSE).
