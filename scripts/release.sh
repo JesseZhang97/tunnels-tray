@@ -14,7 +14,7 @@ ln -s /Applications dist/dmg/Applications
 hdiutil create -volname "Tunnels $VERSION" -srcfolder dist/dmg -ov -format UDZO "dist/Tunnels-$VERSION.dmg"
 rm -rf dist/dmg
 
-ditto -c -k --keepParent build/Tunnels.app "dist/Tunnels-$VERSION.zip"
+ditto -c -k --norsrc --noextattr --noacl --keepParent build/Tunnels.app "dist/Tunnels-$VERSION.zip"
 
 (cd dist && shasum -a 256 "Tunnels-$VERSION.dmg" "Tunnels-$VERSION.zip" > SHA256SUMS.txt)
 echo
