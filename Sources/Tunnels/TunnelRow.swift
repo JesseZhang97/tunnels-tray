@@ -28,32 +28,34 @@ struct TunnelRow: View {
     }
 
     private var leading: some View {
-        HStack(spacing: 10) {
-            Text(":\(String(tunnel.localPort))")
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.blue)
-                .frame(minWidth: 56, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(tunnel.name).fontWeight(.medium).lineLimit(1)
-                    StatusDot(status: state.status)
-                    StatusText(state: state)
-                }
-                Text("\(tunnel.sshHost) → \(tunnel.remoteHost):\(String(tunnel.remotePort))")
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                StatusDot(status: state.status)
+                Text(tunnel.name).fontWeight(.medium).lineLimit(1)
+                StatusText(state: state)
+            }
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let err = visibleError {
+                Text(err)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.red)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                if let err = visibleError {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .help(err)
-                }
+                    .truncationMode(.tail)
+                    .help(err)
             }
         }
+    }
+
+    /// "localhost:18317 → taiwan-nmcloud → 127.0.0.1:18317"
+    private var subtitle: String {
+        let bind = tunnel.bindAddress.trimmingCharacters(in: .whitespaces)
+        let local = ["", "127.0.0.1", "localhost", "::1"].contains(bind)
+            ? "localhost" : (bind.contains(":") ? "[\(bind)]" : bind)
+        return "\(local):\(String(tunnel.localPort)) → \(tunnel.sshHost) → \(tunnel.remoteHost):\(String(tunnel.remotePort))"
     }
 
     private var isOpening: Bool { manager.opening.contains(tunnel.id) }
