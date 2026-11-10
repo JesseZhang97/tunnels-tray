@@ -61,10 +61,24 @@ SSH options 编辑器里的常用 Key：User、Port、IdentityFile（可选文�
 ## 界面
 
 - 顶部：标题 Tunnels，右边 All 开关一键启动或停止全部。
-- 每行：蓝色本地端口、名字、状态点和运行时长、`ssh_host → remote_host:remote_port`。
+- 每行：蓝色本地端口、名字、状态点和状态文字（Connected / Connecting… / Reconnecting… / Stopped / Error）、`ssh_host → remote_host:remote_port`。
 - 行内出错或重连时，在副标题下用一行红字显示最近一次错误（过长会截断，鼠标停留可看全文）。点行本身没有动作。
 - 鼠标悬停：在浏览器打开 `http://<bind>:<local_port>`（bind 为 `0.0.0.0`、`*` 或空时用 `127.0.0.1`）、启动/停止、复制 ssh 命令、编辑、删除（删除要在行内再点一次红色 Delete 确认）。
 - 底部：+ Add、Settings（导入/导出 JSON、在 Finder 中显示、重新读取 ~/.ssh/config）、Quit。
+
+## Test connection
+
+添加和编辑表单里有 "Test connection" 按钮，用表单里当前（未保存）的值检查三项，不影响正在运行的隧道，总时长约 12 秒，可以点 Stop 取消：
+
+1. Local port free：本地端口能否绑定。编辑一条正在运行的隧道且端口没改时，显示 "In use by this tunnel"，算通过。
+2. SSH login：`ssh -T -o BatchMode=yes -o ConnectTimeout=8 <默认选项> <额外选项> <host> exit`，退出码 0 算通过，否则显示 ssh 的报错。
+3. Remote target reachable：第 2 项通过后才做。`ssh <同样的选项> -W remote_host:remote_port <host>`，在 ssh 握手（按第 2 项登录耗时估算）之后再过 2 秒仍在运行且没有 open failed / connect failed / administratively prohibited，就算可达。
+
+在真实主机上跑检查（不经过界面）：
+
+```bash
+TUNNELS_LIVE=1 swift test --filter LiveConnectionTests
+```
 
 ## 配置文件
 
@@ -99,6 +113,7 @@ Sources/TunnelsCore/   纯逻辑，可测试
   SSHConfig.swift      解析 ~/.ssh/config 的 Host（跳过通配符，跟随 Include）
   TunnelStore.swift    JSON 读写
   PortCheck.swift      bind 检测端口是否空闲
+  ConnectionTest.swift 连接测试（命令拼装、结果判断、带超时的进程运行）
 Sources/Tunnels/       App
   TunnelsApp.swift     MenuBarExtra 入口、退出和信号处理
   TunnelManager.swift  ssh 子进程、状态、自动重连

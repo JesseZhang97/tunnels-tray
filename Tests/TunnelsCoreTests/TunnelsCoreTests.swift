@@ -231,3 +231,78 @@ final class SSHOptionsTests: XCTestCase {
         XCTAssertFalse(again)
     }
 }
+
+final class ConnectionTestTests: XCTestCase {
+    let defaults = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"]
+
+    func testLoginArguments() throws {
+        let t = Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317)
+        XCTAssertEqual(try ConnectionTest.loginArguments(for: t),
+                       ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"] + defaults + ["taiwan-nmcloud", "exit"])
+    }
+
+    func testReachArgumentsWithUserOverrides() throws {
+        let t = Tunnel(name: "x", sshHost: "contabo", localPort: 3430, remoteHost: "::1", remotePort: 3430,
+                       sshOptions: "-o connecttimeout=3 -o ServerAliveInterval=60 -C")
+        XCTAssertEqual(try ConnectionTest.reachArguments(for: t), [
+            "-o", "BatchMode=yes",
+            "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+            "-o", "connecttimeout=3", "-o", "ServerAliveInterval=60", "-C",
+            "-W", "[::1]:3430", "contabo",
+        ])
+    }
+
+    func testErrorSummary() {
+        XCTAssertEqual(ConnectionTest.errorSummary("Warning: Permanently added 'x' (ED25519) to the list of known hosts.\nuser@h: Permission denied (publickey).\n"),
+                       "user@h: Permission denied (publickey).")
+        XCTAssertEqual(ConnectionTest.errorSummary("channel 0: open failed: connect failed: Connection refused\nstdio forwarding failed\n"),
+                       "channel 0: open failed: connect failed: Connection refused")
+    }
+
+    func testOutcomeClassification() {
+        XCTAssertEqual(ConnectionTest.loginState(.exited(0, stderr: "")), .passed("Logged in"))
+        XCTAssertEqual(ConnectionTest.loginState(.exited(255, stderr: "ssh: Could not resolve hostname nope: nodename nor servname provided, or not known\n")),
+                       .failed("ssh: Could not resolve hostname nope: nodename nor servname provided, or not known"))
+        XCTAssertEqual(ConnectionTest.loginState(.timedOut(stderr: "")), .failed("Timed out"))
+        XCTAssertEqual(ConnectionTest.reachState(.stillRunning(stderr: ""), target: "a:1"), .passed("a:1 accepted the connection"))
+        XCTAssertEqual(ConnectionTest.reachState(.stillRunning(stderr: "channel 0: open failed: administratively prohibited: open failed"), target: "a:1"),
+                       .failed("channel 0: open failed: administratively prohibited: open failed"))
+        XCTAssertEqual(ConnectionTest.reachState(.exited(255, stderr: "channel 0: open failed: connect failed: Connection refused\nstdio forwarding failed"), target: "a:1"),
+                       .failed("channel 0: open failed: connect failed: Connection refused"))
+        XCTAssertEqual(ConnectionTest.reachState(.exited(0, stderr: ""), target: "a:1"), .passed("a:1 accepted and closed the connection"))
+    }
+
+    func testRunnerTimeoutAndCancel() async {
+        let slow = await ProcessRunner.run(executable: "/bin/sleep", arguments: ["5"], timeout: 0.5)
+        if case .timedOut = slow {} else { XCTFail("expected timeout, got \(slow)") }
+        let alive = await ProcessRunner.run(executable: "/bin/cat", arguments: [], timeout: 5,
+                                            keepStdinOpen: true, aliveAfter: 0.3)
+        XCTAssertEqual(alive, .stillRunning(stderr: ""))
+        let task = Task { await ProcessRunner.run(executable: "/bin/sleep", arguments: ["5"], timeout: 5) }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        task.cancel()
+        let cancelled = await task.value
+        XCTAssertEqual(cancelled, .cancelled)
+        let ok = await ProcessRunner.run(executable: "/bin/sh", arguments: ["-c", "echo oops >&2; exit 3"], timeout: 5)
+        XCTAssertEqual(ok, .exited(3, stderr: "oops\n"))
+    }
+}
+
+/// Real ssh checks against Jesse's hosts. Run with: TUNNELS_LIVE=1 swift test --filter LiveConnectionTests
+final class LiveConnectionTests: XCTestCase {
+    func testLiveHosts() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["TUNNELS_LIVE"] == "1", "set TUNNELS_LIVE=1")
+        let cases = [
+            Tunnel(name: "NMcloud", sshHost: "taiwan-nmcloud", localPort: 18317, remotePort: 18317),
+            Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430, bindAddress: ""),
+            Tunnel(name: "closed-port", sshHost: "contabo", localPort: 3431, remotePort: 1, bindAddress: ""),
+            Tunnel(name: "bogus-host", sshHost: "no-such-host.invalid", localPort: 3432, remotePort: 80),
+        ]
+        for t in cases {
+            let start = Date()
+            let steps = await ConnectionTest.run(t)
+            print("LIVE \(t.name) (\(String(format: "%.1f", Date().timeIntervalSince(start)))s):")
+            for s in steps { print("LIVE   \(s.kind.title): \(s.state)") }
+        }
+    }
+}
