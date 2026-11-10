@@ -38,10 +38,23 @@ Native Swift / SwiftUI (`MenuBarExtra`), system frameworks only, no dependencies
   <img src="docs/screenshots/settings-dark.png" width="400" alt="Settings (dark)">
 </p>
 
+## Install
+
+1. Download `Tunnels-<version>.dmg` from the [latest release](https://github.com/JesseZhang97/tunnels-tray/releases/latest)
+   (or the `.zip`), open it and drag **Tunnels** to **Applications**.
+2. The app is ad-hoc signed, not signed with a Developer ID or notarized, so Gatekeeper blocks the first
+   launch. Allow it once, either way:
+   - Terminal: `xattr -dr com.apple.quarantine /Applications/Tunnels.app`, then open the app; or
+   - open the app once, then **System Settings → Privacy & Security → Open Anyway**.
+     On macOS 15, right-click → Open no longer bypasses this.
+3. Tunnels lives in the menu bar (no Dock icon). It works on Apple Silicon and Intel Macs with macOS 14 or later.
+
+Verify a download with the `SHA256SUMS.txt` from the release: `shasum -a 256 -c SHA256SUMS.txt`.
+
 ## Requirements
 
-- macOS 14 or later
-- Xcode or the Command Line Tools with Swift 5.9 or later
+- macOS 14 or later, Apple Silicon or Intel
+- To build from source: Xcode or the Command Line Tools with Swift 5.9 or later
 - Key-based SSH login (keys or ssh-agent). Tunnels run with `BatchMode=yes`, so ssh never asks for a
   password or a host-key confirmation. Connect once with `ssh <host>` in Terminal to accept a new host key.
 
@@ -55,6 +68,12 @@ open build/Tunnels.app
 ```
 
 Optionally drag `build/Tunnels.app` to `/Applications`.
+
+Release packages (universal arm64 + x86_64 app, `.dmg`, `.zip` and checksums in `dist/`):
+
+```bash
+./scripts/release.sh
+```
 
 Tests:
 
@@ -145,7 +164,8 @@ Sources/TunnelsCore/     Testable logic
   PortCheck.swift        Bind / connect checks
   ConnectionTest.swift   Test connection steps and process runner
 Sources/Tunnels/         The app (SwiftUI views, TunnelManager, snapshot renderer)
-scripts/bundle.sh        Builds Tunnels.app
+scripts/bundle.sh        Builds Tunnels.app (--universal for arm64 + x86_64)
+scripts/release.sh       Builds the .dmg / .zip release packages
 Support/Info.plist       LSUIElement app, bundle id io.github.jessezhang97.tunnels
 ```
 
@@ -164,7 +184,7 @@ Support/Info.plist       LSUIElement app, bundle id io.github.jessezhang97.tunne
 Tunnels 是一个 macOS 菜单栏工具，用来管理 SSH 本地端口转发。在弹窗里添加隧道（名字、`~/.ssh/config` 里的
 Host、本地端口、远端地址和端口），一键启动或停止；点"打开"按钮时，没连上会先自动建立连接，再在浏览器打开页面。
 意外断开会自动重连。表单里可以用列表方式添加常用 SSH 选项，并用 "Test connection" 检查本地端口、SSH 登录和
-远端目标。构建：`./scripts/bundle.sh`，然后 `open build/Tunnels.app`。配置文件在
+远端目标。安装：从 Releases 下载 dmg，拖进"应用程序"；因为没有 Developer ID 签名，首次打开前执行 `xattr -dr com.apple.quarantine /Applications/Tunnels.app`，或在"系统设置 → 隐私与安全性"里点"仍要打开"。从源码构建：`./scripts/bundle.sh`，然后 `open build/Tunnels.app`。配置文件在
 `~/Library/Application Support/Tunnels/tunnels.json`。
 
 ## License
