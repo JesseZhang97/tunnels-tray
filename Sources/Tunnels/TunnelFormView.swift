@@ -33,34 +33,26 @@ struct TunnelFormView: View {
             Form {
                 TextField("Name", text: $draft.name, prompt: Text("NMcloud"))
                 LabeledContent("SSH host") {
-                    HStack(spacing: 4) {
-                        TextField("SSH host", text: $draft.sshHost, prompt: Text("taiwan-nmcloud"))
-                            .labelsHidden()
-                        Menu {
-                            if hosts.isEmpty {
-                                Text("No hosts in ~/.ssh/config")
-                            }
-                            ForEach(hosts, id: \.self) { h in
-                                Button(h) { draft.sshHost = h }
-                            }
-                        } label: {
-                            Image(systemName: "chevron.down")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("Pick a Host from ~/.ssh/config")
-                    }
+                    ComboField(text: $draft.sshHost, items: hosts, prompt: "taiwan-nmcloud",
+                               help: "Pick a Host from ~/.ssh/config")
                 }
                 TextField("Local port", text: $draft.localPort, prompt: Text("18317"))
                 TextField("Remote host", text: $draft.remoteHost, prompt: Text(Tunnel.defaultRemoteHost))
                 TextField("Remote port", text: $draft.remotePort, prompt: Text("18317"))
                 TextField("Bind address", text: $draft.bindAddress, prompt: Text("empty = ssh default"))
-                TextField("SSH options", text: $draft.sshOptions, axis: .vertical)
-                    .lineLimit(2...4)
-                    .font(.system(.body, design: .monospaced))
                 TextField("Note", text: $draft.note, axis: .vertical)
                     .lineLimit(1...4)
+
+                Section {
+                    SSHOptionsEditor(text: $draft.sshOptions, hosts: hosts)
+                } header: {
+                    Text("SSH options")
+                } footer: {
+                    Text("Always added: \(SSHOptions.baseDescription). An option set here replaces the default with the same key.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if let t = draft.tunnel() {
                     Section("Command") {
@@ -93,7 +85,7 @@ struct TunnelFormView: View {
             }
             .padding([.horizontal, .bottom], 16)
         }
-        .frame(width: 460)
+        .frame(width: 580)
         .fixedSize(horizontal: false, vertical: true)
     }
 }
