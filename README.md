@@ -146,7 +146,7 @@ Sources/TunnelsCore/     Testable logic
   ConnectionTest.swift   Test connection steps and process runner
 Sources/Tunnels/         The app (SwiftUI views, TunnelManager, snapshot renderer)
 scripts/bundle.sh        Builds Tunnels.app
-Support/Info.plist       LSUIElement app, bundle id com.jesse.tunnels
+Support/Info.plist       LSUIElement app, bundle id io.github.jessezhang97.tunnels
 ```
 
 ## Known limitations
@@ -156,6 +156,8 @@ Support/Info.plist       LSUIElement app, bundle id com.jesse.tunnels
 - `Match` blocks in `~/.ssh/config` are not evaluated.
 - Password or interactive (2FA) logins are not supported.
 - The app is ad-hoc signed, not notarized; macOS may ask you to confirm the first launch.
+- Preferences (only the menu bar count toggle) live in the `io.github.jessezhang97.tunnels` defaults domain.
+  Builds before this id change used `com.jesse.tunnels`; the toggle simply starts at its default (on).
 
 ## 中文说明
 

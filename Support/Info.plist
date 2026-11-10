@@ -9,7 +9,7 @@
     <key>CFBundleExecutable</key>
     <string>Tunnels</string>
     <key>CFBundleIdentifier</key>
-    <string>com.jesse.tunnels</string>
+    <string>io.github.jessezhang97.tunnels</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
