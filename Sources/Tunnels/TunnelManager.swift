@@ -10,6 +10,8 @@ struct TunnelState: Equatable {
     var status: TunnelStatus = .stopped
     var pid: Int32?
     var lastError: String?
+    /// Why the last "open in browser" gave up; shown in the row.
+    var openError: String?
 
     /// Running, connecting or waiting to reconnect.
     var isActive: Bool { [.starting, .connected, .reconnecting].contains(status) }
@@ -24,6 +26,10 @@ final class TunnelManager: ObservableObject {
     @Published private(set) var states: [UUID: TunnelState] = [:]
     @Published private(set) var sshHosts: [String] = []
     @Published var notice: String?
+    /// Tunnels waiting to connect before their page is opened.
+    @Published private(set) var opening: Set<UUID> = []
+    private var openTasks: [UUID: Task<Void, Never>] = [:]
+    static let openTimeout: TimeInterval = 15
 
     let store = TunnelStore()
     private var runners: [UUID: Runner] = [:]
@@ -125,6 +131,7 @@ final class TunnelManager: ObservableObject {
     }
 
     func stop(_ id: UUID) {
+        cancelOpen(id)
         guard let r = runners[id] else { return }
         r.manualStop = true
         r.restartAfterExit = false
@@ -213,6 +220,7 @@ final class TunnelManager: ObservableObject {
                    !PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) {
                     var s = self.state(for: id)
                     s.status = .connected
+                    s.openError = nil
                     self.states[id] = s
                     return
                 }
@@ -316,6 +324,48 @@ final class TunnelManager: ObservableObject {
     }
 
     // MARK: - Actions
+
+    /// Open the page; start the tunnel first if needed and wait (up to 15 s)
+    /// until it is connected and the local port accepts connections.
+    func openWhenReady(_ id: UUID) {
+        guard !opening.contains(id), let t = tunnels.first(where: { $0.id == id }) else { return }
+        states[id, default: TunnelState()].openError = nil
+        if state(for: id).status == .connected, accepts(t) { return openInBrowser(t) }
+        if !state(for: id).isActive { start(id) }
+        guard state(for: id).isActive else { return } // start failed; row shows the error
+        opening.insert(id)
+        openTasks[id] = Task { @MainActor [weak self] in
+            await self?.waitAndOpen(id)
+            self?.opening.remove(id)
+            self?.openTasks[id] = nil
+        }
+    }
+
+    private func waitAndOpen(_ id: UUID) async {
+        let deadline = Date().addingTimeInterval(Self.openTimeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let t = tunnels.first(where: { $0.id == id }) else { return }
+            let s = state(for: id)
+            if s.status == .stopped || s.status == .error { return }
+            if s.status == .connected, accepts(t) { return openInBrowser(t) }
+        }
+        guard !Task.isCancelled else { return }
+        states[id, default: TunnelState()].openError =
+            "Not connected after \(Int(Self.openTimeout)) s, page not opened"
+            + (state(for: id).lastError.map { ": \($0)" } ?? "")
+    }
+
+    private func cancelOpen(_ id: UUID) {
+        openTasks[id]?.cancel()
+        openTasks[id] = nil
+        opening.remove(id)
+    }
+
+    private func accepts(_ t: Tunnel) -> Bool {
+        let addr = PortCheck.checkAddress(for: t.bindAddress)
+        return PortCheck.acceptsConnection(address: addr == "0.0.0.0" ? "127.0.0.1" : addr, port: t.localPort)
+    }
 
     func openInBrowser(_ t: Tunnel) {
         if let url = t.browserURL { NSWorkspace.shared.open(url) }

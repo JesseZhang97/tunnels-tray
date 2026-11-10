@@ -169,8 +169,11 @@ final class PortCheckTests: XCTestCase {
         let port = Int(UInt16(bigEndian: addr.sin_port))
         XCTAssertFalse(PortCheck.isFree(bindAddress: "127.0.0.1", port: port))
         XCTAssertFalse(PortCheck.isFree(bindAddress: "", port: port))
+        XCTAssertTrue(PortCheck.acceptsConnection(address: "127.0.0.1", port: port))
         close(fd)
         XCTAssertTrue(PortCheck.isFree(bindAddress: "127.0.0.1", port: port))
+        XCTAssertFalse(PortCheck.acceptsConnection(address: "127.0.0.1", port: port))
+        XCTAssertFalse(PortCheck.acceptsConnection(address: "not-an-ip", port: port))
     }
 }
 
@@ -304,5 +307,51 @@ final class LiveConnectionTests: XCTestCase {
             print("LIVE \(t.name) (\(String(format: "%.1f", Date().timeIntervalSince(start)))s):")
             for s in steps { print("LIVE   \(s.kind.title): \(s.state)") }
         }
+    }
+}
+
+/// Auto-connect path used by "open in browser": start the real ssh forward and
+/// wait until the local port accepts connections. No browser is opened.
+/// Run with: TUNNELS_LIVE=1 swift test --filter LiveAutoConnectTests
+final class LiveAutoConnectTests: XCTestCase {
+    private func startAndWait(_ t: Tunnel, timeout: TimeInterval = 15) throws -> (accepted: Bool, seconds: Double, stderr: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: SSHCommand.executable)
+        p.arguments = try SSHCommand.arguments(for: t)
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        let err = Pipe()
+        p.standardError = err
+        let start = Date()
+        try p.run()
+        defer {
+            if p.isRunning { p.terminate() }
+            p.waitUntilExit()
+        }
+        while Date().timeIntervalSince(start) < timeout {
+            if PortCheck.acceptsConnection(address: "127.0.0.1", port: t.localPort) {
+                return (true, Date().timeIntervalSince(start), "")
+            }
+            if !p.isRunning {
+                let text = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                return (false, Date().timeIntervalSince(start), text)
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        return (false, timeout, "timed out")
+    }
+
+    func testLiveAutoConnect() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["TUNNELS_LIVE"] == "1", "set TUNNELS_LIVE=1")
+        let magpie = Tunnel(name: "magpie", sshHost: "contabo", localPort: 3430, remotePort: 3430, bindAddress: "")
+        XCTAssertTrue(PortCheck.isFree(bindAddress: "", port: 3430), "port 3430 must be free before the test")
+        let ok = try startAndWait(magpie)
+        print("LIVE magpie accepted=\(ok.accepted) after \(String(format: "%.1f", ok.seconds))s \(ok.stderr)")
+        XCTAssertTrue(ok.accepted)
+
+        let bogus = Tunnel(name: "bogus", sshHost: "no-such-host.invalid", localPort: 3433, remotePort: 80)
+        let bad = try startAndWait(bogus)
+        print("LIVE bogus accepted=\(bad.accepted) after \(String(format: "%.1f", bad.seconds))s stderr=\(bad.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        XCTAssertFalse(bad.accepted)
     }
 }

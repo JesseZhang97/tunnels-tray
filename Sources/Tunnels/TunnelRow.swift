@@ -56,8 +56,11 @@ struct TunnelRow: View {
         }
     }
 
+    private var isOpening: Bool { manager.opening.contains(tunnel.id) }
+
     /// Last error, shown while the tunnel is failing (error or retrying).
     private var visibleError: String? {
+        if let e = state.openError { return e }
         guard state.status == .error || state.status == .reconnecting,
               let err = state.lastError, !err.isEmpty else { return nil }
         return err
@@ -77,9 +80,18 @@ struct TunnelRow: View {
             }
         } else {
             HStack(spacing: 0) {
+                if hovering || isOpening {
+                    if isOpening {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 22, height: 22)
+                            .help("Connecting, then opening \(tunnel.browserURL?.absoluteString ?? "")")
+                    } else {
+                        IconButton(symbol: "arrow.up.forward.square",
+                                   help: "Open \(tunnel.browserURL?.absoluteString ?? "")") { manager.openWhenReady(tunnel.id) }
+                    }
+                }
                 if hovering {
-                    IconButton(symbol: "arrow.up.forward.square",
-                               help: "Open \(tunnel.browserURL?.absoluteString ?? "")") { manager.openInBrowser(tunnel) }
                     IconButton(symbol: state.isActive ? "stop.fill" : "play.fill",
                                help: state.isActive ? "Stop" : "Start") { manager.toggle(tunnel.id) }
                     IconButton(symbol: "doc.on.doc", help: "Copy ssh command") { manager.copyCommand(tunnel) }

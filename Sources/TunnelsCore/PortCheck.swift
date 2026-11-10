@@ -39,6 +39,44 @@ public enum PortCheck {
         return nil // hostname bind address: let ssh decide
     }
 
+    /// True if a TCP connect to address:port succeeds (meant for loopback).
+    public static func acceptsConnection(address: String, port: Int) -> Bool {
+        let host = address.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        var v4 = sockaddr_in()
+        var v6 = sockaddr_in6()
+        if inet_pton(AF_INET, host, &v4.sin_addr) == 1 {
+            #if canImport(Darwin)
+            v4.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            #endif
+            v4.sin_family = sa_family_t(AF_INET)
+            v4.sin_port = in_port_t(UInt16(port).bigEndian)
+            return tryConnect(family: AF_INET, &v4)
+        }
+        if inet_pton(AF_INET6, host, &v6.sin6_addr) == 1 {
+            #if canImport(Darwin)
+            v6.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            #endif
+            v6.sin6_family = sa_family_t(AF_INET6)
+            v6.sin6_port = in_port_t(UInt16(port).bigEndian)
+            return tryConnect(family: AF_INET6, &v6)
+        }
+        return false
+    }
+
+    private static func tryConnect<T>(family: Int32, _ addr: inout T) -> Bool {
+        #if canImport(Darwin)
+        let fd = socket(family, SOCK_STREAM, 0)
+        #else
+        let fd = socket(family, Int32(SOCK_STREAM.rawValue), 0)
+        #endif
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        let size = socklen_t(MemoryLayout<T>.size)
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, size) }
+        } == 0
+    }
+
     public static func isFree(bindAddress: String, port: Int) -> Bool {
         bindError(address: checkAddress(for: bindAddress), port: port) == nil
     }

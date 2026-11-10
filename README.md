@@ -63,7 +63,7 @@ SSH options 编辑器里的常用 Key：User、Port、IdentityFile（可选文�
 - 顶部：标题 Tunnels，右边 All 开关一键启动或停止全部。
 - 每行：蓝色本地端口、名字、状态点和状态文字（Connected / Connecting… / Reconnecting… / Stopped / Error）、`ssh_host → remote_host:remote_port`。
 - 行内出错或重连时，在副标题下用一行红字显示最近一次错误（过长会截断，鼠标停留可看全文）。点行本身没有动作。
-- 鼠标悬停：在浏览器打开 `http://<bind>:<local_port>`（bind 为 `0.0.0.0`、`*` 或空时用 `127.0.0.1`）、启动/停止、复制 ssh 命令、编辑、删除（删除要在行内再点一次红色 Delete 确认）。
+- 鼠标悬停：在浏览器打开 `http://<bind>:<local_port>`（bind 为 `0.0.0.0`、`*` 或空时用 `127.0.0.1`；隧道没连上时会先自动启动，等到连上且端口能连通再打开，最多等 15 秒，超时或出错不打开并在行内显示原因，等待时按钮变成转圈，点 Stop 会取消）、启动/停止、复制 ssh 命令、编辑、删除（删除要在行内再点一次红色 Delete 确认）。
 - 菜单栏：图标后面显示已连接的隧道数，0 条时只显示图标；可在 Settings 里关掉 "Show connection count in menu bar"（默认开）。
 - 底部：+ Add、Settings（显示连接数开关、导入/导出 JSON、在 Finder 中显示、重新读取 ~/.ssh/config）、Quit。
 
