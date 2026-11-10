@@ -14,12 +14,11 @@ struct TunnelRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 leading
-                    .help("Open \(tunnel.browserURL?.absoluteString ?? "")")
                 Spacer(minLength: 4)
                 trailing
             }
             .contentShape(Rectangle())
-            .onTapGesture { manager.openInBrowser(tunnel) }
+            .onTapGesture { toggleExpanded() }
 
             if isExpanded {
                 details.transition(.opacity.combined(with: .move(edge: .top)))
@@ -35,6 +34,10 @@ struct TunnelRow: View {
             withAnimation(.easeOut(duration: 0.12)) { hovering = inside }
             if !inside { confirmingDelete = false }
         }
+    }
+
+    private func toggleExpanded() {
+        withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
     }
 
     private var leading: some View {
@@ -73,6 +76,8 @@ struct TunnelRow: View {
         } else {
             HStack(spacing: 0) {
                 if hovering {
+                    IconButton(symbol: "arrow.up.forward.square",
+                               help: "Open \(tunnel.browserURL?.absoluteString ?? "")") { manager.openInBrowser(tunnel) }
                     IconButton(symbol: state.isActive ? "stop.fill" : "play.fill",
                                help: state.isActive ? "Stop" : "Start") { manager.toggle(tunnel.id) }
                     IconButton(symbol: "doc.on.doc", help: "Copy ssh command") { manager.copyCommand(tunnel) }
@@ -80,7 +85,7 @@ struct TunnelRow: View {
                     IconButton(symbol: "trash", help: "Delete") { confirmingDelete = true }
                 }
                 IconButton(symbol: "chevron.right", help: isExpanded ? "Hide details" : "Show details") {
-                    withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+                    toggleExpanded()
                 }
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
