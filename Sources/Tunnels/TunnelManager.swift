@@ -49,7 +49,7 @@ final class TunnelManager: ObservableObject {
 
     // MARK: - Data
 
-    var anyConnected: Bool { states.values.contains { $0.status == .connected } }
+    var connectedCount: Int { states.values.filter { $0.status == .connected }.count }
     var anyActive: Bool { states.values.contains { $0.isActive } }
 
     func state(for id: UUID) -> TunnelState { states[id] ?? TunnelState() }

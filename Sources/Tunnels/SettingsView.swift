@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject var manager: TunnelManager
     @State private var message: String?
+    @AppStorage(Prefs.showConnectionCount) private var showConnectionCount = true
 
     var body: some View {
         Form {
@@ -24,6 +25,9 @@ struct SettingsView: View {
                         NSWorkspace.shared.activateFileViewerSelecting([manager.store.url])
                     }
                 }
+            }
+            Section("Menu bar") {
+                Toggle("Show connection count in menu bar", isOn: $showConnectionCount)
             }
             Section("SSH") {
                 LabeledContent("Hosts in ~/.ssh/config") { Text("\(manager.sshHosts.count)") }
