@@ -9,8 +9,6 @@ enum TunnelStatus: Equatable {
 struct TunnelState: Equatable {
     var status: TunnelStatus = .stopped
     var pid: Int32?
-    var connectedAt: Date?
-    var nextRetryAt: Date?
     var lastError: String?
 
     /// Running, connecting or waiting to reconnect.
@@ -136,8 +134,6 @@ final class TunnelManager: ObservableObject {
         var s = state(for: id)
         s.status = .stopped
         s.pid = nil
-        s.connectedAt = nil
-        s.nextRetryAt = nil
         states[id] = s
     }
 
@@ -199,8 +195,6 @@ final class TunnelManager: ObservableObject {
         var s = state(for: id)
         s.status = r.attempt == 0 ? .starting : .reconnecting
         s.pid = p.processIdentifier
-        s.connectedAt = nil
-        s.nextRetryAt = nil
         states[id] = s
         watchForConnect(id, process: p)
     }
@@ -219,7 +213,6 @@ final class TunnelManager: ObservableObject {
                    !PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) {
                     var s = self.state(for: id)
                     s.status = .connected
-                    s.connectedAt = Date()
                     self.states[id] = s
                     return
                 }
@@ -260,9 +253,7 @@ final class TunnelManager: ObservableObject {
         var s = state(for: id)
         s.status = .reconnecting
         s.pid = nil
-        s.connectedAt = nil
         s.lastError = reason
-        s.nextRetryAt = Date().addingTimeInterval(delay)
         states[id] = s
         r.retryTask?.cancel()
         r.retryTask = Task { @MainActor [weak self] in
@@ -276,8 +267,6 @@ final class TunnelManager: ObservableObject {
         var s = state(for: id)
         s.status = status
         s.pid = nil
-        s.connectedAt = nil
-        s.nextRetryAt = nil
         if let error { s.lastError = error }
         states[id] = s
     }
@@ -292,7 +281,7 @@ final class TunnelManager: ObservableObject {
     }
 
     /// "name (pid N)" of the process listening on a TCP port, via lsof.
-    private static func listeningProcess(port: Int) -> String? {
+    nonisolated static func listeningProcess(port: Int) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
         p.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpc"]

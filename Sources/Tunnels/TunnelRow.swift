@@ -130,32 +130,19 @@ struct StatusText: View {
     let state: TunnelState
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            Text(label(now: ctx.date))
-                .font(.caption2)
-                .foregroundStyle(state.status == .error ? Color.red : Color.secondary)
-                .lineLimit(1)
-        }
+        Text(label)
+            .font(.caption2)
+            .foregroundStyle(state.status == .error ? Color.red : Color.secondary)
+            .lineLimit(1)
     }
 
-    private func label(now: Date) -> String {
+    private var label: String {
         switch state.status {
-        case .connected:
-            return state.connectedAt.map { formatDuration(now.timeIntervalSince($0)) } ?? "Up"
+        case .connected: return "Connected"
         case .starting: return "Connecting…"
-        case .reconnecting:
-            if let t = state.nextRetryAt, t > now { return "Retry in \(Int(t.timeIntervalSince(now).rounded(.up)))s" }
-            return "Reconnecting…"
+        case .reconnecting: return "Reconnecting…"
         case .stopped: return "Stopped"
         case .error: return "Error"
         }
     }
-}
-
-func formatDuration(_ seconds: TimeInterval) -> String {
-    let s = max(0, Int(seconds))
-    if s < 60 { return "\(s)s" }
-    if s < 3600 { return "\(s / 60)m \(s % 60)s" }
-    if s < 86400 { return "\(s / 3600)h \(s % 3600 / 60)m" }
-    return "\(s / 86400)d \(s % 86400 / 3600)h"
 }
