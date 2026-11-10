@@ -3,7 +3,6 @@ import TunnelsCore
 
 struct PopoverView: View {
     @EnvironmentObject var manager: TunnelManager
-    @State private var expanded: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,14 +64,7 @@ struct PopoverView: View {
     private var list: some View {
         VStack(spacing: 2) {
             ForEach(manager.tunnels) { t in
-                TunnelRow(
-                    tunnel: t,
-                    state: manager.state(for: t.id),
-                    isExpanded: Binding(
-                        get: { expanded.contains(t.id) },
-                        set: { if $0 { expanded.insert(t.id) } else { expanded.remove(t.id) } }
-                    )
-                )
+                TunnelRow(tunnel: t, state: manager.state(for: t.id))
             }
         }
         .padding(6)

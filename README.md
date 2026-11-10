@@ -62,7 +62,7 @@ SSH options 编辑器里的常用 Key：User、Port、IdentityFile（可选文�
 
 - 顶部：标题 Tunnels，右边 All 开关一键启动或停止全部。
 - 每行：蓝色本地端口、名字、状态点和运行时长、`ssh_host → remote_host:remote_port`。
-- 点行本身或箭头：展开或收起详情（完整命令、PID、运行时长、Note、最近一次错误）。
+- 行内出错或重连时，在副标题下用一行红字显示最近一次错误（过长会截断，鼠标停留可看全文）。点行本身没有动作。
 - 鼠标悬停：在浏览器打开 `http://<bind>:<local_port>`（bind 为 `0.0.0.0`、`*` 或空时用 `127.0.0.1`）、启动/停止、复制 ssh 命令、编辑、删除（删除要在行内再点一次红色 Delete 确认）。
 - 底部：+ Add、Settings（导入/导出 JSON、在 Finder 中显示、重新读取 ~/.ssh/config）、Quit。
 

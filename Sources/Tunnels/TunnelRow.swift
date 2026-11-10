@@ -5,24 +5,15 @@ struct TunnelRow: View {
     @EnvironmentObject var manager: TunnelManager
     let tunnel: Tunnel
     let state: TunnelState
-    @Binding var isExpanded: Bool
 
     @State private var hovering = false
     @State private var confirmingDelete = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                leading
-                Spacer(minLength: 4)
-                trailing
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { toggleExpanded() }
-
-            if isExpanded {
-                details.transition(.opacity.combined(with: .move(edge: .top)))
-            }
+        HStack(spacing: 10) {
+            leading
+            Spacer(minLength: 4)
+            trailing
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -34,10 +25,6 @@ struct TunnelRow: View {
             withAnimation(.easeOut(duration: 0.12)) { hovering = inside }
             if !inside { confirmingDelete = false }
         }
-    }
-
-    private func toggleExpanded() {
-        withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
     }
 
     private var leading: some View {
@@ -57,8 +44,23 @@ struct TunnelRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if let err = visibleError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(err)
+                }
             }
         }
+    }
+
+    /// Last error, shown while the tunnel is failing (error or retrying).
+    private var visibleError: String? {
+        guard state.status == .error || state.status == .reconnecting,
+              let err = state.lastError, !err.isEmpty else { return nil }
+        return err
     }
 
     @ViewBuilder private var trailing: some View {
@@ -84,35 +86,8 @@ struct TunnelRow: View {
                     IconButton(symbol: "pencil", help: "Edit") { Windows.shared.openForm(editing: tunnel) }
                     IconButton(symbol: "trash", help: "Delete") { confirmingDelete = true }
                 }
-                IconButton(symbol: "chevron.right", help: isExpanded ? "Hide details" : "Show details") {
-                    toggleExpanded()
-                }
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
         }
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(SSHCommand.commandLine(for: tunnel))
-                .font(.system(size: 11, design: .monospaced))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
-            DetailLine(label: "PID", value: state.pid.map { String($0) } ?? "—")
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                DetailLine(label: "Uptime", value: state.connectedAt.map { formatDuration(ctx.date.timeIntervalSince($0)) } ?? "—")
-            }
-            if !tunnel.note.isEmpty {
-                DetailLine(label: "Note", value: tunnel.note)
-            }
-            if let err = state.lastError {
-                DetailLine(label: "Last error", value: err, color: .red)
-            }
-        }
-        .font(.caption)
     }
 }
 
@@ -131,20 +106,6 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
-    }
-}
-
-struct DetailLine: View {
-    let label: String
-    let value: String
-    var color: Color = .primary
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(label).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
-            Text(value).foregroundStyle(color).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 }
 
