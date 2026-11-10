@@ -19,7 +19,7 @@ struct TunnelRow: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(hovering ? Color.primary.opacity(0.07) : Color.clear)
+                .fill(isHovered ? Color.primary.opacity(0.07) : Color.clear)
         )
         .onHover { inside in
             withAnimation(.easeOut(duration: 0.12)) { hovering = inside }
@@ -50,13 +50,15 @@ struct TunnelRow: View {
         }
     }
 
-    /// "localhost:18317 → taiwan-nmcloud → 127.0.0.1:18317"
+    /// "localhost:8080 → my-server → 127.0.0.1:8080"
     private var subtitle: String {
         let bind = tunnel.bindAddress.trimmingCharacters(in: .whitespaces)
         let local = ["", "127.0.0.1", "localhost", "::1"].contains(bind)
             ? "localhost" : (bind.contains(":") ? "[\(bind)]" : bind)
         return "\(local):\(String(tunnel.localPort)) → \(tunnel.sshHost) → \(tunnel.remoteHost):\(String(tunnel.remotePort))"
     }
+
+    private var isHovered: Bool { hovering || manager.demoHoverID == tunnel.id }
 
     private var isOpening: Bool { manager.opening.contains(tunnel.id) }
 
@@ -82,7 +84,7 @@ struct TunnelRow: View {
             }
         } else {
             HStack(spacing: 0) {
-                if hovering || isOpening {
+                if isHovered || isOpening {
                     if isOpening {
                         ProgressView()
                             .controlSize(.mini)
@@ -93,7 +95,7 @@ struct TunnelRow: View {
                                    help: "Open \(tunnel.browserURL?.absoluteString ?? "")") { manager.openWhenReady(tunnel.id) }
                     }
                 }
-                if hovering {
+                if isHovered {
                     IconButton(symbol: state.isActive ? "stop.fill" : "play.fill",
                                help: state.isActive ? "Stop" : "Start") { manager.toggle(tunnel.id) }
                     IconButton(symbol: "doc.on.doc", help: "Copy ssh command") { manager.copyCommand(tunnel) }

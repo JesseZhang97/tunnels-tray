@@ -2,6 +2,19 @@ import AppKit
 import SwiftUI
 
 @main
+enum Main {
+    static func main() {
+        // `Tunnels --snapshot <dir>` renders README screenshots with demo data and exits.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--snapshot") {
+            let dir = i + 1 < args.count ? args[i + 1] : "docs/screenshots"
+            MainActor.assumeIsolated { Snapshots.run(outputDirectory: dir) }
+            return
+        }
+        TunnelsApp.main()
+    }
+}
+
 struct TunnelsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var manager = TunnelManager.shared
@@ -12,17 +25,26 @@ struct TunnelsApp: App {
             PopoverView()
                 .environmentObject(manager)
         } label: {
-            let count = manager.connectedCount
-            HStack(spacing: 3) {
-                Image(systemName: count > 0
-                    ? "point.3.filled.connected.trianglepath.dotted"
-                    : "point.3.connected.trianglepath.dotted")
-                if showConnectionCount && count > 0 {
-                    Text("\(count)").monospacedDigit()
-                }
-            }
+            MenuBarLabel(count: manager.connectedCount, showCount: showConnectionCount)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Menu bar icon, followed by the connected count when enabled and non-zero.
+struct MenuBarLabel: View {
+    let count: Int
+    let showCount: Bool
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: count > 0
+                ? "point.3.filled.connected.trianglepath.dotted"
+                : "point.3.connected.trianglepath.dotted")
+            if showCount && count > 0 {
+                Text("\(count)").monospacedDigit()
+            }
+        }
     }
 }
 

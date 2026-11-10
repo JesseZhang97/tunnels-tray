@@ -13,7 +13,9 @@ struct TunnelFormView: View {
     @State private var testTask: Task<Void, Never>?
 
     init(original: Tunnel?, hosts: [String], others: [Tunnel],
+         testSteps: [ConnectionTest.Step] = [],
          onSave: @escaping (Tunnel) -> Void, onCancel: @escaping () -> Void) {
+        _testSteps = State(initialValue: testSteps)
         self.original = original
         self.hosts = hosts
         self.others = others
@@ -33,14 +35,14 @@ struct TunnelFormView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                TextField("Name", text: $draft.name, prompt: Text("NMcloud"))
+                TextField("Name", text: $draft.name, prompt: Text("My Web App"))
                 LabeledContent("SSH host") {
-                    ComboField(text: $draft.sshHost, items: hosts, prompt: "taiwan-nmcloud",
+                    ComboField(text: $draft.sshHost, items: hosts, prompt: "my-server",
                                help: "Pick a Host from ~/.ssh/config")
                 }
-                TextField("Local port", text: $draft.localPort, prompt: Text("18317"))
+                TextField("Local port", text: $draft.localPort, prompt: Text("8080"))
                 TextField("Remote host", text: $draft.remoteHost, prompt: Text(Tunnel.defaultRemoteHost))
-                TextField("Remote port", text: $draft.remotePort, prompt: Text("18317"))
+                TextField("Remote port", text: $draft.remotePort, prompt: Text("8080"))
                 TextField("Bind address", text: $draft.bindAddress, prompt: Text("empty = ssh default"))
                 TextField("Note", text: $draft.note, axis: .vertical)
                     .lineLimit(1...4)

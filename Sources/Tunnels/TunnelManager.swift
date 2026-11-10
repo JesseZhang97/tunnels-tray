@@ -31,7 +31,11 @@ final class TunnelManager: ObservableObject {
     private var openTasks: [UUID: Task<Void, Never>] = [:]
     static let openTimeout: TimeInterval = 15
 
-    let store = TunnelStore()
+    let store: TunnelStore
+    /// Demo instances (screenshots) never touch disk or processes.
+    private let isDemo: Bool
+    /// Demo only: draw this row as hovered.
+    private(set) var demoHoverID: UUID?
     private var runners: [UUID: Runner] = [:]
 
     /// Mutable per-tunnel process bookkeeping.
@@ -49,8 +53,19 @@ final class TunnelManager: ObservableObject {
     static let maxBackoff: Double = 30
 
     init() {
+        store = TunnelStore()
+        isDemo = false
         loadTunnels()
         reloadSSHHosts()
+    }
+
+    init(demoTunnels: [Tunnel], states: [UUID: TunnelState], hosts: [String], storeURL: URL, hoverID: UUID? = nil) {
+        store = TunnelStore(url: storeURL)
+        isDemo = true
+        tunnels = demoTunnels
+        self.states = states
+        sshHosts = hosts
+        demoHoverID = hoverID
     }
 
     // MARK: - Data
@@ -80,6 +95,7 @@ final class TunnelManager: ObservableObject {
     }
 
     private func persist() {
+        guard !isDemo else { return }
         do { try store.save(tunnels) } catch { notice = "Save failed: \(error.localizedDescription)" }
     }
 
