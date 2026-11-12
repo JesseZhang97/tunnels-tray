@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import TunnelsCore
 
 enum TunnelStatus: Equatable {
@@ -37,6 +38,13 @@ final class TunnelManager: ObservableObject {
     /// Demo only: draw this row as hovered.
     private(set) var demoHoverID: UUID?
     private var runners: [UUID: Runner] = [:]
+    private var wakeObserver: NSObjectProtocol?
+    private var pathMonitor: NWPathMonitor?
+    private var lastPathSignature: String?
+    private var pendingTriggers: Set<String> = []
+    private var reconnectTask: Task<Void, Never>?
+    /// Wait after wake / network change before restarting, to merge bursts.
+    static let reconnectDelay: TimeInterval = 2
 
     /// Mutable per-tunnel process bookkeeping.
     private final class Runner {
@@ -45,7 +53,9 @@ final class TunnelManager: ObservableObject {
         var attempt = 0
         var manualStop = false
         var restartAfterExit = false
-        /// Why the next launch happens: "start" or "retry".
+        /// Restart right after the current process exits (wake / network change).
+        var relaunchAfterExit = false
+        /// Why the next launch happens: "start", "retry", "wake", "network change".
         var trigger = "start"
         var stderrTail = ""
         var retryTask: Task<Void, Never>?
@@ -59,6 +69,7 @@ final class TunnelManager: ObservableObject {
         isDemo = false
         loadTunnels()
         reloadSSHHosts()
+        watchWakeAndNetwork()
     }
 
     init(demoTunnels: [Tunnel], states: [UUID: TunnelState], hosts: [String], storeURL: URL, hoverID: UUID? = nil) {
@@ -143,6 +154,7 @@ final class TunnelManager: ObservableObject {
         runners[id] = r
         r.manualStop = false
         r.restartAfterExit = false
+        r.relaunchAfterExit = false
         r.attempt = 0
         r.trigger = "start"
         r.retryTask?.cancel()
@@ -155,6 +167,7 @@ final class TunnelManager: ObservableObject {
         if state(for: id).isActive { log(id, "Stopped") }
         r.manualStop = true
         r.restartAfterExit = false
+        r.relaunchAfterExit = false
         r.retryTask?.cancel()
         r.checkTask?.cancel()
         if let p = r.process, p.isRunning { p.terminate() }
@@ -177,7 +190,7 @@ final class TunnelManager: ObservableObject {
 
         if let reason = portBusyReason(t) {
             log(id, "Port busy: \(reason)")
-            if r.attempt == 0 {
+            if r.attempt == 0 && r.trigger == "start" {
                 setState(id, .error, error: reason)
                 r.manualStop = true
             } else {
@@ -275,6 +288,11 @@ final class TunnelManager: ObservableObject {
             if r.restartAfterExit { start(id) }
             return
         }
+        if r.relaunchAfterExit {
+            r.relaunchAfterExit = false
+            launch(id)
+            return
+        }
         // A connection that held for a while resets the backoff.
         if let launched = r.launchedAt, Date().timeIntervalSince(launched) > 30 { r.attempt = 0 }
         scheduleRetry(id, reason: message)
@@ -349,6 +367,66 @@ final class TunnelManager: ObservableObject {
         let deadline = Date().addingTimeInterval(1)
         while procs.contains(where: \.isRunning), Date() < deadline { usleep(50_000) }
         procs.filter(\.isRunning).forEach { kill($0.processIdentifier, SIGKILL) }
+    }
+
+    // MARK: - Wake and network changes
+
+    private func watchWakeAndNetwork() {
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleReconnect("wake") }
+        }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let signature = Self.signature(of: path)
+            let satisfied = path.status == .satisfied
+            Task { @MainActor in self?.networkChanged(signature: signature, satisfied: satisfied) }
+        }
+        monitor.start(queue: DispatchQueue(label: "io.github.jessezhang97.tunnels.path"))
+        pathMonitor = monitor
+    }
+
+    /// Status, interfaces and gateways: a change means existing TCP connections may be dead.
+    nonisolated private static func signature(of path: NWPath) -> String {
+        "\(path.status)|" + path.availableInterfaces.map(\.name).joined(separator: ",")
+            + "|" + path.gateways.map { "\($0)" }.joined(separator: ",")
+    }
+
+    private func networkChanged(signature: String, satisfied: Bool) {
+        defer { lastPathSignature = signature }
+        guard let last = lastPathSignature, last != signature, satisfied else { return }
+        scheduleReconnect("network change")
+    }
+
+    private func scheduleReconnect(_ trigger: String) {
+        pendingTriggers.insert(trigger)
+        reconnectTask?.cancel()
+        reconnectTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.reconnectDelay * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            let why = self.pendingTriggers.sorted().joined(separator: " + ")
+            self.pendingTriggers = []
+            self.reconnectActive(trigger: why)
+        }
+    }
+
+    /// Restart every running or retrying tunnel now: cancel the backoff and
+    /// start over, since the old TCP connection may be dead without ssh knowing yet.
+    func reconnectActive(trigger: String) {
+        for t in tunnels {
+            guard let r = runners[t.id], !r.manualStop, state(for: t.id).isActive else { continue }
+            log(t.id, "\(trigger.capitalized): restarting")
+            r.retryTask?.cancel()
+            r.attempt = 0
+            r.trigger = trigger
+            if let p = r.process, p.isRunning {
+                r.relaunchAfterExit = true
+                p.terminate()
+            } else {
+                launch(t.id)
+            }
+        }
     }
 
     // MARK: - Logs
