@@ -17,12 +17,23 @@ Native Swift / SwiftUI (`MenuBarExtra`), system frameworks only, no dependencies
   Stopped (gray), Error (red, with the reason on a red line).
 - **Menu bar count**: the icon shows how many tunnels are connected
   (<img src="docs/screenshots/menubar-light.png" height="18" alt="menu bar icon with count">); can be turned off in Settings.
-- **Hover actions** per row: open in browser, start/stop, copy the ssh command, edit, delete (inline confirm).
+- **Hover actions** per row: open in browser, start/stop, copy the ssh command, show log, edit, delete (inline confirm).
 - **Open in browser auto-connects**: if the tunnel is not up yet, it is started and the page opens
   as soon as the local port accepts connections (up to 15 s).
 - **"All" switch** to start or stop every tunnel.
 - **Auto-reconnect** on unexpected exit with backoff 1, 2, 4 … 30 s. A manual stop never reconnects.
-- **Port check** before start: if the local port is taken, the row shows which process holds it.
+- **Reconnect after wake and network changes**: when the Mac wakes or the network path changes
+  (interface, gateway, back online), running and retrying tunnels are restarted after 2 s, without
+  waiting for the old connection to time out.
+- **Port check** before start: if the local port is taken, the row shows which process holds it and
+  what it is (old ssh with the same forward, other ssh, another tunnel here, not ssh), with
+  **End & Connect** (ssh is ended right away, SIGTERM then SIGKILL after 1 s; any other process asks
+  first) and **Use Another Port** (opens the form with a free local port filled in).
+- **Log per tunnel** in `~/Library/Logs/Tunnels/<name>.log`: starts with the trigger (start, retry,
+  wake, network change), exit status, ssh error output, port conflicts. Rotated at 1 MB to `<name>.log.1`.
+- **Leftover cleanup**: running ssh children are recorded in `children.json`; on the next launch,
+  recorded processes that were orphaned by a crash or force-quit (parent is launchd and the command
+  line is unchanged) are ended.
 - **Friendly SSH options editor**: pick common `ssh_config` keys (User, Port, IdentityFile, ProxyJump,
   Compression, ConnectTimeout, StrictHostKeyChecking, LogLevel, IPQoS, …) with proper controls,
   or a custom key; an "Advanced: raw" view edits the `-o Key=Value` text directly.
@@ -112,11 +123,11 @@ Each tunnel runs:
 
 ```
 /usr/bin/ssh -N -T -o BatchMode=yes \
-    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o ConnectTimeout=10 \
     -L <bind>:<local port>:<remote host>:<remote port> <extra options> <ssh host>
 ```
 
-`-N -T -o BatchMode=yes` and the three default `-o` options are always added. If a tunnel sets one of the
+`-N -T -o BatchMode=yes` and the four default `-o` options are always added. If a tunnel sets one of the
 default keys itself (for example `ServerAliveInterval=60`), its value is used and the default is left out.
 
 **Test connection** checks, with a 12 s budget and a Stop button:
@@ -161,7 +172,10 @@ Sources/TunnelsCore/     Testable logic
   SSHOptions.swift       -o option parsing/generation/validation, built-in defaults, migration
   SSHConfig.swift        Host names from ~/.ssh/config
   TunnelStore.swift      JSON storage
-  PortCheck.swift        Bind / connect checks
+  PortCheck.swift        Bind / connect checks, free port suggestion
+  PortOwner.swift        Who holds a port (lsof + ps), classification, ending a process
+  ChildRegistry.swift    children.json and orphan matching
+  TunnelLog.swift        Per-tunnel log files with rotation
   ConnectionTest.swift   Test connection steps and process runner
 Sources/Tunnels/         The app (SwiftUI views, TunnelManager, snapshot renderer)
 scripts/bundle.sh        Builds Tunnels.app (--universal for arm64 + x86_64)
@@ -171,7 +185,12 @@ Support/Info.plist       LSUIElement app, bundle id io.github.jessezhang97.tunne
 
 ## Known limitations
 
-- If the app is force-killed (`kill -9`) or crashes, ssh child processes are left running.
+- If the app is force-killed (`kill -9`) or crashes, ssh child processes keep running until the app is
+  launched again.
+- "Connected" means ssh is up and the local port listens. If the remote service stops while ssh stays
+  up, the row still shows Connected; connections through the tunnel fail until it is back.
+- A Wi-Fi switch that keeps the same interface and gateway address is not seen as a network change;
+  ssh notices the dead connection after about 45 s (ServerAlive) and reconnects.
 - A bind address given as a hostname (not an IP) skips the local port pre-check.
 - `Match` blocks in `~/.ssh/config` are not evaluated.
 - Password or interactive (2FA) logins are not supported.
