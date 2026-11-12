@@ -40,6 +40,9 @@ final class TunnelManager: ObservableObject {
     /// Demo only: draw this row as hovered.
     private(set) var demoHoverID: UUID?
     private var runners: [UUID: Runner] = [:]
+    /// Running ssh children, mirrored to children.json for orphan cleanup.
+    private let registry: ChildRegistry
+    private var children: [UUID: ChildRecord] = [:]
     private var wakeObserver: NSObjectProtocol?
     private var pathMonitor: NWPathMonitor?
     private var lastPathSignature: String?
@@ -68,14 +71,17 @@ final class TunnelManager: ObservableObject {
 
     init() {
         store = TunnelStore()
+        registry = ChildRegistry()
         isDemo = false
         loadTunnels()
         reloadSSHHosts()
+        cleanupOrphans()
         watchWakeAndNetwork()
     }
 
     init(demoTunnels: [Tunnel], states: [UUID: TunnelState], hosts: [String], storeURL: URL, hoverID: UUID? = nil) {
         store = TunnelStore(url: storeURL)
+        registry = ChildRegistry(url: storeURL.deletingLastPathComponent().appendingPathComponent("children.json"))
         isDemo = true
         tunnels = demoTunnels
         self.states = states
@@ -242,6 +248,8 @@ final class TunnelManager: ObservableObject {
         r.launchedAt = Date()
         r.stderrTail = ""
         log(id, "Start (\(r.trigger)), pid \(p.processIdentifier): ssh \(ShellWords.join(args))")
+        children[id] = ChildRecord(tunnelID: id, pid: p.processIdentifier, argv: [SSHCommand.executable] + args)
+        persistChildren()
         var s = state(for: id)
         s.status = r.attempt == 0 ? .starting : .reconnecting
         s.pid = p.processIdentifier
@@ -286,6 +294,10 @@ final class TunnelManager: ObservableObject {
     }
 
     private func handleExit(_ id: UUID, _ p: Process, code: Int32, bySignal: Bool) {
+        if children[id]?.pid == p.processIdentifier {
+            children[id] = nil
+            persistChildren()
+        }
         guard let r = runners[id], r.process === p else { return }
         r.process = nil
         r.checkTask?.cancel()
@@ -380,6 +392,8 @@ final class TunnelManager: ObservableObject {
         let deadline = Date().addingTimeInterval(1)
         while procs.contains(where: \.isRunning), Date() < deadline { usleep(50_000) }
         procs.filter(\.isRunning).forEach { kill($0.processIdentifier, SIGKILL) }
+        children.removeAll()
+        persistChildren()
     }
 
     // MARK: - Port conflicts
@@ -513,7 +527,7 @@ final class TunnelManager: ObservableObject {
         }
     }
 
-    // MARK: - Logs
+    // MARK: - Logs and child registry
 
     func logURL(for t: Tunnel) -> URL { TunnelLog(tunnelName: t.name).url }
 
@@ -530,6 +544,33 @@ final class TunnelManager: ObservableObject {
         } else {
             try? FileManager.default.createDirectory(at: TunnelLog.directory, withIntermediateDirectories: true)
             NSWorkspace.shared.open(TunnelLog.directory)
+        }
+    }
+
+    private func persistChildren() {
+        guard !isDemo else { return }
+        try? registry.save(children.values.sorted { $0.startedAt < $1.startedAt })
+    }
+
+    /// End ssh processes a previous run left behind (crash, force-quit): only
+    /// recorded pids now owned by launchd whose command line is unchanged.
+    private func cleanupOrphans() {
+        let records = registry.load()
+        guard !records.isEmpty else { return }
+        Task { [weak self] in
+            let lines = await Task.detached { () -> [(UUID, String)] in
+                var lines: [(UUID, String)] = []
+                for rec in records {
+                    guard let info = PortOwners.processInfo(pid: rec.pid),
+                          ChildRegistry.isOrphan(rec, ppid: info.ppid, args: info.args) else { continue }
+                    let outcome = ProcessKiller.terminate(pid: rec.pid)
+                    lines.append((rec.tunnelID, "Launch cleanup: orphaned ssh pid \(rec.pid): \(outcome)"))
+                }
+                return lines
+            }.value
+            guard let self else { return }
+            lines.forEach { self.log($0.0, $0.1) }
+            self.persistChildren()
         }
     }
 
