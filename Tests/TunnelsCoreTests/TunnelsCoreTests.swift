@@ -400,3 +400,103 @@ final class LiveAutoConnectTests: XCTestCase {
         XCTAssertFalse(bad.accepted)
     }
 }
+
+final class PortOwnerTests: XCTestCase {
+    let t = Tunnel(name: "cpa", sshHost: "taiwan-nmcloud", localPort: 8317, remotePort: 8317)
+
+    func testParseLsof() {
+        XCTAssertEqual(PortOwners.parseLsof("p24840\ncssh\nf5\n").map { [String($0.pid), $0.name] }, ["24840", "ssh"])
+        // Two listeners (v4 + v6) of different processes: the first one wins.
+        XCTAssertEqual(PortOwners.parseLsof("p1\ncnc\np2\ncssh\n")?.pid, 1)
+        XCTAssertNil(PortOwners.parseLsof(""))
+    }
+
+    func testParsePS() {
+        let r = PortOwners.parsePS("    1 /usr/bin/ssh -N -L 8317:127.0.0.1:8317 taiwan-nmcloud\n")
+        XCTAssertEqual(r?.ppid, 1)
+        XCTAssertEqual(r?.args, "/usr/bin/ssh -N -L 8317:127.0.0.1:8317 taiwan-nmcloud")
+        XCTAssertEqual(PortOwners.parsePS("42")?.ppid, 42)
+        XCTAssertNil(PortOwners.parsePS(""))
+        XCTAssertNil(PortOwners.parsePS("abc def"))
+    }
+
+    func testMatchesForward() {
+        let jesse = "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:8317:127.0.0.1:8317 taiwan-nmcloud"
+        XCTAssertTrue(PortOwners.matchesForward(args: jesse, tunnel: t))
+        XCTAssertTrue(PortOwners.matchesForward(args: "ssh -fNL8317:localhost:8317 root@taiwan-nmcloud", tunnel: t))
+        XCTAssertFalse(PortOwners.matchesForward(args: "ssh -L 8317:127.0.0.1:9999 taiwan-nmcloud", tunnel: t))
+        XCTAssertFalse(PortOwners.matchesForward(args: "ssh -L 8317:127.0.0.1:8317 other-host", tunnel: t))
+        XCTAssertFalse(PortOwners.matchesForward(args: "ssh taiwan-nmcloud", tunnel: t))
+        let v6 = Tunnel(name: "v6", sshHost: "h", localPort: 80, remoteHost: "::1", remotePort: 8080, bindAddress: "::1")
+        XCTAssertTrue(PortOwners.matchesForward(args: "/usr/bin/ssh -L [::1]:80:[::1]:8080 h", tunnel: v6))
+    }
+
+    func testClassify() {
+        let ssh = "/usr/bin/ssh -N -L 127.0.0.1:8317:127.0.0.1:8317 taiwan-nmcloud"
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "ssh", args: ssh, tunnel: t, ownPIDs: [5]), .ownChild)
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "ssh", args: ssh, tunnel: t, ownPIDs: []), .staleSameForward)
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "ssh", args: "ssh -D 8317 h", tunnel: t, ownPIDs: []), .otherSSH)
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "nc", args: "nc -l 8317", tunnel: t, ownPIDs: []), .other)
+        XCTAssertTrue(PortOwner(pid: 5, ppid: 1, name: "nc", args: "", kind: .other).needsConfirmation)
+        XCTAssertFalse(PortOwner(pid: 5, ppid: 1, name: "ssh", args: "", kind: .otherSSH).needsConfirmation)
+    }
+
+    /// Real listeners on a free port: an `nc -l` and a Terminal-style orphan ssh.
+    func testFindRealListeners() throws {
+        let port = freeLocalPort()
+        let tunnel = Tunnel(name: "probe", sshHost: "no-such-host.invalid", localPort: port, remotePort: port)
+
+        // nc -l, detached so it is not our child.
+        let ncPID = try spawnDetached("nc -l 127.0.0.1 \(port)")
+        defer { _ = ProcessKiller.terminate(pid: ncPID) }
+        XCTAssertTrue(waitUntil { !PortCheck.isFree(bindAddress: "127.0.0.1", port: port) })
+        let nc = try XCTUnwrap(PortOwners.find(tunnel: tunnel))
+        XCTAssertEqual(nc.pid, ncPID)
+        XCTAssertEqual(nc.kind, .other)
+        XCTAssertEqual(nc.ppid, 1)
+        XCTAssertEqual(ProcessKiller.terminate(pid: ncPID), .ended)
+        XCTAssertTrue(waitUntil { PortCheck.isFree(bindAddress: "127.0.0.1", port: port) })
+        XCTAssertEqual(ProcessKiller.terminate(pid: ncPID), .alreadyGone)
+    }
+
+    func testKillerEscalatesToSIGKILL() throws {
+        let pid = try spawnDetached("( trap '' TERM; while :; do sleep 0.1; done )")
+        XCTAssertTrue(ProcessKiller.isAlive(pid))
+        XCTAssertEqual(ProcessKiller.terminate(pid: pid, grace: 0.5), .killed)
+        XCTAssertFalse(ProcessKiller.isAlive(pid))
+        XCTAssertEqual(ProcessKiller.terminate(pid: 1), .failed("refusing to signal pid 1"))
+    }
+
+    func testSuggestFreePort() {
+        let p = freeLocalPort()
+        let s = PortCheck.suggestFreePort(after: p, bindAddress: "127.0.0.1", avoiding: [p + 1])
+        XCTAssertNotNil(s)
+        XCTAssertNotEqual(s, p + 1)
+        XCTAssertGreaterThan(s ?? 0, p)
+        XCTAssertNil(PortCheck.suggestFreePort(after: 65535, bindAddress: "127.0.0.1"))
+    }
+}
+
+/// Start a shell command detached (re-parented to launchd, like a Terminal
+/// `nohup ... &` leftover) and return its pid.
+func spawnDetached(_ command: String) throws -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", "\(command) >/dev/null 2>&1 </dev/null & echo $!"]
+    let out = Pipe()
+    p.standardOutput = out
+    try p.run()
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    return try XCTUnwrap(Int32(text), "no pid from: \(text)")
+}
+
+func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    return condition()
+}
