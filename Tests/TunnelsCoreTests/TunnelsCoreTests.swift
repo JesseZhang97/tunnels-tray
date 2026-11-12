@@ -500,6 +500,35 @@ final class ChildRegistryTests: XCTestCase {
     }
 }
 
+final class TunnelLogTests: XCTestCase {
+    func testFileName() {
+        XCTAssertEqual(TunnelLog.fileName(for: "cpa-mgmt"), "cpa-mgmt.log")
+        XCTAssertEqual(TunnelLog.fileName(for: " a/b:c "), "a-b-c.log")
+        XCTAssertEqual(TunnelLog.fileName(for: ".."), "tunnel.log")
+        XCTAssertEqual(TunnelLog.fileName(for: ""), "tunnel.log")
+    }
+
+    func testFormatAndRotate() throws {
+        let date = Date(timeIntervalSince1970: 0)
+        let line = TunnelLog.format("a\n\n  b  \n", date: date)
+        XCTAssertEqual(line.split(separator: "\n").count, 2)
+        XCTAssertTrue(line.hasSuffix(" b\n"))
+        XCTAssertEqual(TunnelLog.format(" \n", date: date), "")
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = TunnelLog(tunnelName: "x", directory: dir, maxBytes: 100)
+        log.append("first")
+        log.append("second")
+        XCTAssertEqual(try String(contentsOf: log.url, encoding: .utf8).split(separator: "\n").count, 2)
+        for i in 0..<10 { log.append("line \(i) padding padding") }
+        let backup = log.url.appendingPathExtension("1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: log.url.path)[.size] as? Int)
+        XCTAssertLessThan(size, 200)
+    }
+}
+
 /// Start a shell command detached (re-parented to launchd, like a Terminal
 /// `nohup ... &` leftover) and return its pid.
 func spawnDetached(_ command: String) throws -> Int32 {
