@@ -47,6 +47,9 @@ public enum SSHOptions {
         ("ServerAliveInterval", "15"),
         ("ServerAliveCountMax", "3"),
         ("ExitOnForwardFailure", "yes"),
+        // Fail fast when the network is down (e.g. right after wake) so the
+        // retry loop is not stuck in a long TCP connect.
+        ("ConnectTimeout", "10"),
     ]
 
     /// Text shown read-only in the form.

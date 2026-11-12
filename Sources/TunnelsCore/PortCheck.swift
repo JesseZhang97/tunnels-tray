@@ -81,6 +81,16 @@ public enum PortCheck {
         bindError(address: checkAddress(for: bindAddress), port: port) == nil
     }
 
+    /// First free port after `port` (up to 200 tries) that is not in `avoiding`.
+    public static func suggestFreePort(after port: Int, bindAddress: String, avoiding: Set<Int> = []) -> Int? {
+        let start = max(1024, port + 1)
+        guard start <= 65535 else { return nil }
+        for candidate in start...min(65535, start + 199) where !avoiding.contains(candidate) {
+            if isFree(bindAddress: bindAddress, port: candidate) { return candidate }
+        }
+        return nil
+    }
+
     private static func tryBind<T>(family: Int32, _ addr: inout T) -> String? {
         #if canImport(Darwin)
         let fd = socket(family, SOCK_STREAM, 0)

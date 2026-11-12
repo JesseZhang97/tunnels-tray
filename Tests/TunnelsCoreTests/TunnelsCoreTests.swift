@@ -24,14 +24,15 @@ final class ShellWordsTests: XCTestCase {
 
 final class SSHCommandTests: XCTestCase {
     let base = ["-N", "-T", "-o", "BatchMode=yes",
-                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"]
+                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+                "-o", "ConnectTimeout=10"]
 
     func testDefaultCommand() throws {
         let t = Tunnel(name: "My Web App", sshHost: "my-server", localPort: 8080, remotePort: 8080)
         XCTAssertEqual(try SSHCommand.arguments(for: t),
                        base + ["-L", "127.0.0.1:8080:127.0.0.1:8080", "my-server"])
         XCTAssertEqual(SSHCommand.commandLine(for: t),
-            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 my-server")
+            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -L 127.0.0.1:8080:127.0.0.1:8080 my-server")
     }
 
     func testEmptyBind() throws {
@@ -44,11 +45,22 @@ final class SSHCommandTests: XCTestCase {
                        sshOptions: "-o serveraliveinterval=60 -C -o Compression=yes")
         XCTAssertEqual(try SSHCommand.arguments(for: t), [
             "-N", "-T", "-o", "BatchMode=yes",
-            "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10",
             "-L", "127.0.0.1:1:127.0.0.1:2",
             "-o", "serveraliveinterval=60", "-C", "-o", "Compression=yes",
             "h",
         ])
+    }
+
+    func testConnectTimeoutDefaultAndOverride() throws {
+        let t = Tunnel(name: "x", sshHost: "h", localPort: 1, remotePort: 2, sshOptions: "-o ConnectTimeout=30")
+        let args = try SSHCommand.arguments(for: t)
+        XCTAssertFalse(args.contains("ConnectTimeout=10"))
+        XCTAssertTrue(args.contains("ConnectTimeout=30"))
+        // The connection test keeps its own shorter timeout, once.
+        let plain = Tunnel(name: "y", sshHost: "h", localPort: 1, remotePort: 2)
+        XCTAssertEqual(try ConnectionTest.loginArguments(for: plain).filter { $0.hasPrefix("ConnectTimeout=") },
+                       ["ConnectTimeout=8"])
     }
 
     func testIPv6() {
@@ -386,5 +398,188 @@ final class LiveAutoConnectTests: XCTestCase {
         let bad = try startAndWait(bogus)
         print("LIVE bogus accepted=\(bad.accepted) after \(String(format: "%.1f", bad.seconds))s stderr=\(bad.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         XCTAssertFalse(bad.accepted)
+    }
+}
+
+final class PortOwnerTests: XCTestCase {
+    let t = Tunnel(name: "cpa", sshHost: "taiwan-nmcloud", localPort: 8317, remotePort: 8317)
+
+    func testParseLsof() {
+        XCTAssertEqual(PortOwners.parseLsof("p24840\ncssh\nf5\n").map { [String($0.pid), $0.name] }, ["24840", "ssh"])
+        // Two listeners (v4 + v6) of different processes: the first one wins.
+        XCTAssertEqual(PortOwners.parseLsof("p1\ncnc\np2\ncssh\n")?.pid, 1)
+        XCTAssertNil(PortOwners.parseLsof(""))
+    }
+
+    func testParsePS() {
+        let r = PortOwners.parsePS("    1 /usr/bin/ssh -N -L 8317:127.0.0.1:8317 taiwan-nmcloud\n")
+        XCTAssertEqual(r?.ppid, 1)
+        XCTAssertEqual(r?.args, "/usr/bin/ssh -N -L 8317:127.0.0.1:8317 taiwan-nmcloud")
+        XCTAssertEqual(PortOwners.parsePS("42")?.ppid, 42)
+        XCTAssertNil(PortOwners.parsePS(""))
+        XCTAssertNil(PortOwners.parsePS("abc def"))
+    }
+
+    func testMatchesForward() {
+        let jesse = "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:8317:127.0.0.1:8317 taiwan-nmcloud"
+        XCTAssertTrue(PortOwners.matchesForward(args: jesse, tunnel: t))
+        XCTAssertTrue(PortOwners.matchesForward(args: "ssh -fNL8317:localhost:8317 root@taiwan-nmcloud", tunnel: t))
+        XCTAssertFalse(PortOwners.matchesForward(args: "ssh -L 8317:127.0.0.1:9999 taiwan-nmcloud", tunnel: t))
+        XCTAssertFalse(PortOwners.matchesForward(args: "ssh -L 8317:127.0.0.1:8317 other-host", tunnel: t))
+        XCTAssertFalse(PortOwners.matchesForward(args: "ssh taiwan-nmcloud", tunnel: t))
+        let v6 = Tunnel(name: "v6", sshHost: "h", localPort: 80, remoteHost: "::1", remotePort: 8080, bindAddress: "::1")
+        XCTAssertTrue(PortOwners.matchesForward(args: "/usr/bin/ssh -L [::1]:80:[::1]:8080 h", tunnel: v6))
+    }
+
+    func testClassify() {
+        let ssh = "/usr/bin/ssh -N -L 127.0.0.1:8317:127.0.0.1:8317 taiwan-nmcloud"
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "ssh", args: ssh, tunnel: t, ownPIDs: [5]), .ownChild)
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "ssh", args: ssh, tunnel: t, ownPIDs: []), .staleSameForward)
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "ssh", args: "ssh -D 8317 h", tunnel: t, ownPIDs: []), .otherSSH)
+        XCTAssertEqual(PortOwners.classify(pid: 5, name: "nc", args: "nc -l 8317", tunnel: t, ownPIDs: []), .other)
+        XCTAssertTrue(PortOwner(pid: 5, ppid: 1, name: "nc", args: "", kind: .other).needsConfirmation)
+        XCTAssertFalse(PortOwner(pid: 5, ppid: 1, name: "ssh", args: "", kind: .otherSSH).needsConfirmation)
+    }
+
+    /// Real listeners on a free port: an `nc -l` and a Terminal-style orphan ssh.
+    func testFindRealListeners() throws {
+        let port = freeLocalPort()
+        let tunnel = Tunnel(name: "probe", sshHost: "no-such-host.invalid", localPort: port, remotePort: port)
+
+        // nc -l, detached so it is not our child.
+        let ncPID = try spawnDetached("nc -l 127.0.0.1 \(port)")
+        defer { _ = ProcessKiller.terminate(pid: ncPID) }
+        XCTAssertTrue(waitUntil { !PortCheck.isFree(bindAddress: "127.0.0.1", port: port) })
+        let nc = try XCTUnwrap(PortOwners.find(tunnel: tunnel))
+        XCTAssertEqual(nc.pid, ncPID)
+        XCTAssertEqual(nc.kind, .other)
+        XCTAssertEqual(nc.ppid, 1)
+        XCTAssertEqual(ProcessKiller.terminate(pid: ncPID), .ended)
+        XCTAssertTrue(waitUntil { PortCheck.isFree(bindAddress: "127.0.0.1", port: port) })
+        XCTAssertEqual(ProcessKiller.terminate(pid: ncPID), .alreadyGone)
+    }
+
+    func testKillerEscalatesToSIGKILL() throws {
+        let pid = try spawnDetached("( trap '' TERM; while :; do sleep 0.1; done )")
+        XCTAssertTrue(ProcessKiller.isAlive(pid))
+        XCTAssertEqual(ProcessKiller.terminate(pid: pid, grace: 0.5), .killed)
+        XCTAssertFalse(ProcessKiller.isAlive(pid))
+        XCTAssertEqual(ProcessKiller.terminate(pid: 1), .failed("refusing to signal pid 1"))
+    }
+
+    func testSuggestFreePort() {
+        let p = freeLocalPort()
+        let s = PortCheck.suggestFreePort(after: p, bindAddress: "127.0.0.1", avoiding: [p + 1])
+        XCTAssertNotNil(s)
+        XCTAssertNotEqual(s, p + 1)
+        XCTAssertGreaterThan(s ?? 0, p)
+        XCTAssertNil(PortCheck.suggestFreePort(after: 65535, bindAddress: "127.0.0.1"))
+    }
+}
+
+final class ChildRegistryTests: XCTestCase {
+    func testSaveLoadAndOrphanMatch() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let reg = ChildRegistry(url: dir.appendingPathComponent("children.json"))
+        XCTAssertEqual(reg.load(), [])
+        let rec = ChildRecord(tunnelID: UUID(), pid: 4242,
+                              argv: ["/usr/bin/ssh", "-N", "-L", "127.0.0.1:18399:127.0.0.1:8317", "h"],
+                              startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try reg.save([rec])
+        XCTAssertEqual(reg.load(), [rec])
+
+        let args = "/usr/bin/ssh -N -L 127.0.0.1:18399:127.0.0.1:8317 h"
+        XCTAssertTrue(ChildRegistry.isOrphan(rec, ppid: 1, args: args + "\n"))
+        XCTAssertFalse(ChildRegistry.isOrphan(rec, ppid: 777, args: args), "still has a live parent")
+        XCTAssertFalse(ChildRegistry.isOrphan(rec, ppid: 1, args: "/usr/bin/ssh -N other"), "pid reused")
+        XCTAssertFalse(ChildRegistry.isOrphan(rec, ppid: 1, args: ""))
+
+        try Data("garbage".utf8).write(to: reg.url)
+        XCTAssertEqual(reg.load(), [])
+    }
+}
+
+final class TunnelLogTests: XCTestCase {
+    func testFileName() {
+        XCTAssertEqual(TunnelLog.fileName(for: "cpa-mgmt"), "cpa-mgmt.log")
+        XCTAssertEqual(TunnelLog.fileName(for: " a/b:c "), "a-b-c.log")
+        XCTAssertEqual(TunnelLog.fileName(for: ".."), "tunnel.log")
+        XCTAssertEqual(TunnelLog.fileName(for: ""), "tunnel.log")
+    }
+
+    func testFormatAndRotate() throws {
+        let date = Date(timeIntervalSince1970: 0)
+        let line = TunnelLog.format("a\n\n  b  \n", date: date)
+        XCTAssertEqual(line.split(separator: "\n").count, 2)
+        XCTAssertTrue(line.hasSuffix(" b\n"))
+        XCTAssertEqual(TunnelLog.format(" \n", date: date), "")
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = TunnelLog(tunnelName: "x", directory: dir, maxBytes: 100)
+        log.append("first")
+        log.append("second")
+        XCTAssertEqual(try String(contentsOf: log.url, encoding: .utf8).split(separator: "\n").count, 2)
+        for i in 0..<10 { log.append("line \(i) padding padding") }
+        let backup = log.url.appendingPathExtension("1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: log.url.path)[.size] as? Int)
+        XCTAssertLessThan(size, 200)
+    }
+}
+
+/// Start a shell command detached (re-parented to launchd, like a Terminal
+/// `nohup ... &` leftover) and return its pid.
+func spawnDetached(_ command: String) throws -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", "\(command) >/dev/null 2>&1 </dev/null & echo $!"]
+    let out = Pipe()
+    p.standardOutput = out
+    try p.run()
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    return try XCTUnwrap(Int32(text), "no pid from: \(text)")
+}
+
+func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    return condition()
+}
+
+/// A Terminal-style leftover: the tunnel's exact ssh command, started detached
+/// (parent becomes launchd). It must be classified as a stale same-forward ssh,
+/// match a registry record, and end cleanly. Uses LiveConfig (see above).
+final class LiveStaleSSHTests: XCTestCase {
+    func testLiveStaleSSHOwner() throws {
+        let cfg = try LiveConfig.load()
+        let t = Tunnel(name: "stale", sshHost: cfg.host, localPort: freeLocalPort(), remotePort: cfg.port)
+        let args = try SSHCommand.arguments(for: t)
+        let pid = try spawnDetached(ShellWords.join([SSHCommand.executable] + args))
+        defer { _ = ProcessKiller.terminate(pid: pid) }
+        XCTAssertTrue(waitUntil(timeout: 15) { !PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) })
+
+        let owner = try XCTUnwrap(PortOwners.find(tunnel: t))
+        print("LIVE stale owner: \(owner)")
+        XCTAssertEqual(owner.pid, pid)
+        XCTAssertEqual(owner.ppid, 1)
+        XCTAssertEqual(owner.kind, .staleSameForward)
+        XCTAssertFalse(owner.needsConfirmation)
+        XCTAssertEqual(PortOwners.find(tunnel: t, ownPIDs: [pid])?.kind, .ownChild)
+
+        let record = ChildRecord(tunnelID: t.id, pid: pid, argv: [SSHCommand.executable] + args)
+        let info = try XCTUnwrap(PortOwners.processInfo(pid: pid))
+        XCTAssertTrue(ChildRegistry.isOrphan(record, ppid: info.ppid, args: info.args))
+
+        let outcome = ProcessKiller.terminate(pid: pid)
+        print("LIVE stale end: \(outcome)")
+        XCTAssertEqual(outcome, .ended)
+        XCTAssertTrue(waitUntil { PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) })
     }
 }
