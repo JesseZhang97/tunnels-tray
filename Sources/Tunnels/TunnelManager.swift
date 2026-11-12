@@ -13,6 +13,8 @@ struct TunnelState: Equatable {
     var lastError: String?
     /// Why the last "open in browser" gave up; shown in the row.
     var openError: String?
+    /// Process holding the local port when the last start failed because of it.
+    var portOwner: PortOwner?
 
     /// Running, connecting or waiting to reconnect.
     var isActive: Bool { [.starting, .connected, .reconnecting].contains(status) }
@@ -122,7 +124,8 @@ final class TunnelManager: ObservableObject {
         let changed = tunnels[i] != t
         tunnels[i] = t
         persist()
-        if changed, state(for: t.id).isActive { restart(t.id) }
+        // A tunnel that failed on a busy port is retried with its new settings.
+        if changed, state(for: t.id).isActive || state(for: t.id).portOwner != nil { restart(t.id) }
     }
 
     func delete(_ id: UUID) {
@@ -174,6 +177,7 @@ final class TunnelManager: ObservableObject {
         var s = state(for: id)
         s.status = .stopped
         s.pid = nil
+        s.portOwner = nil
         states[id] = s
     }
 
@@ -188,9 +192,12 @@ final class TunnelManager: ObservableObject {
         guard let t = tunnels.first(where: { $0.id == id }), let r = runners[id], !r.manualStop else { return }
         if r.process?.isRunning == true { return }
 
-        if let reason = portBusyReason(t) {
-            log(id, "Port busy: \(reason)")
+        if let busy = portBusy(t) {
+            let reason = busy.reason
+            states[id, default: TunnelState()].portOwner = busy.owner
+            log(id, "Port busy: \(reason)" + (busy.owner.map { " [\($0.kindDescription)] \($0.args)" } ?? ""))
             if r.attempt == 0 && r.trigger == "start" {
+                // The row offers "End & Connect" / "Use Another Port"; no silent retry.
                 setState(id, .error, error: reason)
                 r.manualStop = true
             } else {
@@ -238,6 +245,7 @@ final class TunnelManager: ObservableObject {
         var s = state(for: id)
         s.status = r.attempt == 0 ? .starting : .reconnecting
         s.pid = p.processIdentifier
+        s.portOwner = nil
         states[id] = s
         watchForConnect(id, process: p)
     }
@@ -325,13 +333,18 @@ final class TunnelManager: ObservableObject {
         states[id] = s
     }
 
-    private func portBusyReason(_ t: Tunnel) -> String? {
+    /// Why the local port cannot be bound, and who holds it (if lsof can tell).
+    private func portBusy(_ t: Tunnel) -> (reason: String, owner: PortOwner?)? {
         let addr = PortCheck.checkAddress(for: t.bindAddress)
         guard let err = PortCheck.bindError(address: addr, port: t.localPort) else { return nil }
-        if let owner = Self.listeningProcess(port: t.localPort) {
-            return "Port \(t.localPort) is in use by \(owner)"
+        if let owner = PortOwners.find(tunnel: t, ownPIDs: ownPIDs) {
+            return ("Port \(t.localPort) is in use by \(owner.label)", owner)
         }
-        return "Cannot bind \(addr):\(t.localPort): \(err)"
+        return ("Cannot bind \(addr):\(t.localPort): \(err)", nil)
+    }
+
+    private var ownPIDs: Set<Int32> {
+        Set(runners.values.compactMap { $0.process?.isRunning == true ? $0.process?.processIdentifier : nil })
     }
 
     /// "name (pid N)" of the process listening on a TCP port, via lsof.
@@ -367,6 +380,77 @@ final class TunnelManager: ObservableObject {
         let deadline = Date().addingTimeInterval(1)
         while procs.contains(where: \.isRunning), Date() < deadline { usleep(50_000) }
         procs.filter(\.isRunning).forEach { kill($0.processIdentifier, SIGKILL) }
+    }
+
+    // MARK: - Port conflicts
+
+    /// End the process holding the local port, then start the tunnel.
+    /// ssh processes are ended without asking; anything else needs a confirmation.
+    func endPortOwnerAndStart(_ id: UUID) {
+        guard let t = tunnels.first(where: { $0.id == id }), let owner = state(for: id).portOwner else { return }
+        if owner.kind == .ownChild,
+           let otherID = runners.first(where: { $0.value.process?.processIdentifier == owner.pid })?.key {
+            log(id, "Stopping tunnel \(tunnels.first { $0.id == otherID }?.name ?? "") that holds port \(t.localPort)")
+            stop(otherID)
+            startWhenPortFree(id)
+            return
+        }
+        if owner.needsConfirmation, !confirmEnd(owner, port: t.localPort) { return }
+        states[id, default: TunnelState()].lastError = "Ending \(owner.label)…"
+        log(id, "Ending \(owner.label) [\(owner.kindDescription)]: \(owner.args)")
+        Task { [weak self] in
+            let outcome = await Task.detached { () -> ProcessKiller.Outcome in
+                // Make sure the pid still belongs to the same process before signalling it.
+                guard let current = PortOwners.find(tunnel: t) else { return .alreadyGone }
+                guard current.pid == owner.pid, current.args == owner.args else {
+                    return .failed("the port is now held by \(current.label); try again")
+                }
+                return ProcessKiller.terminate(pid: owner.pid)
+            }.value
+            self?.finishEnding(id, owner: owner, outcome: outcome)
+        }
+    }
+
+    private func finishEnding(_ id: UUID, owner: PortOwner, outcome: ProcessKiller.Outcome) {
+        log(id, "End \(owner.label): \(outcome)")
+        if case .failed(let why) = outcome {
+            setState(id, .error, error: "Could not end \(owner.label): \(why)")
+            return
+        }
+        startWhenPortFree(id)
+    }
+
+    /// Start once the local port can be bound (up to 3 s), so a just-ended
+    /// listener does not make the start fail again.
+    private func startWhenPortFree(_ id: UUID) {
+        Task { @MainActor [weak self] in
+            for _ in 0..<30 {
+                guard let t = self?.tunnels.first(where: { $0.id == id }) else { return }
+                if PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            self?.start(id)
+        }
+    }
+
+    private func confirmEnd(_ owner: PortOwner, port: Int) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "End \(owner.label)?"
+        alert.informativeText = "It is listening on port \(port) and is not an ssh process.\n\n"
+            + (owner.args.isEmpty ? owner.name : owner.args)
+        alert.addButton(withTitle: "End Process and Connect")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Open the edit form with a free local port filled in.
+    func useAnotherPort(_ id: UUID) {
+        guard let t = tunnels.first(where: { $0.id == id }) else { return }
+        let taken = Set(tunnels.map(\.localPort))
+        let port = PortCheck.suggestFreePort(after: t.localPort, bindAddress: t.bindAddress, avoiding: taken)
+        Windows.shared.openForm(editing: t, localPort: port)
     }
 
     // MARK: - Wake and network changes

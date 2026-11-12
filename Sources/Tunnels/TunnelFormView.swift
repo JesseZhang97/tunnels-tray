@@ -13,6 +13,7 @@ struct TunnelFormView: View {
     @State private var testTask: Task<Void, Never>?
 
     init(original: Tunnel?, hosts: [String], others: [Tunnel],
+         localPort: Int? = nil,
          testSteps: [ConnectionTest.Step] = [],
          onSave: @escaping (Tunnel) -> Void, onCancel: @escaping () -> Void) {
         _testSteps = State(initialValue: testSteps)
@@ -21,7 +22,9 @@ struct TunnelFormView: View {
         self.others = others
         self.onSave = onSave
         self.onCancel = onCancel
-        _draft = State(initialValue: original.map(TunnelDraft.init) ?? TunnelDraft())
+        var draft = original.map(TunnelDraft.init) ?? TunnelDraft()
+        if let localPort { draft.localPort = String(localPort) }
+        _draft = State(initialValue: draft)
     }
 
     private var warnings: [String] {

@@ -47,7 +47,33 @@ struct TunnelRow: View {
                     .truncationMode(.tail)
                     .help(err)
             }
+            if let owner = visiblePortOwner {
+                portConflict(owner)
+            }
         }
+    }
+
+    /// Who holds the port, plus the two ways out.
+    private func portConflict(_ owner: PortOwner) -> some View {
+        HStack(spacing: 8) {
+            Text(owner.kindDescription)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(owner.args.isEmpty ? owner.label : owner.args)
+            Button("End & Connect") { manager.endPortOwnerAndStart(tunnel.id) }
+                .help(owner.needsConfirmation
+                      ? "End \(owner.label) (asks first), then start this tunnel"
+                      : "End \(owner.label), then start this tunnel")
+            Button("Use Another Port") { manager.useAnotherPort(tunnel.id) }
+                .help("Edit this tunnel with a free local port")
+        }
+        .font(.caption)
+        .buttonStyle(.link)
+    }
+
+    private var visiblePortOwner: PortOwner? {
+        guard state.status == .error || state.status == .reconnecting else { return nil }
+        return state.portOwner
     }
 
     /// "localhost:8080 → my-server → 127.0.0.1:8080"

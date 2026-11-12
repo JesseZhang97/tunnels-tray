@@ -27,7 +27,8 @@ final class Windows {
         windows[key]?.close()
     }
 
-    func openForm(editing tunnel: Tunnel?) {
+    /// `localPort` pre-fills a different local port (e.g. a free one after a port conflict).
+    func openForm(editing tunnel: Tunnel?, localPort: Int? = nil) {
         let m = TunnelManager.shared
         m.reloadSSHHosts()
         show("form", title: tunnel == nil ? "Add Tunnel" : "Edit Tunnel") {
@@ -35,6 +36,7 @@ final class Windows {
                 original: tunnel,
                 hosts: m.sshHosts,
                 others: m.tunnels.filter { $0.id != tunnel?.id },
+                localPort: localPort,
                 onSave: { t in
                     if tunnel == nil { m.add(t) } else { m.update(t) }
                     Windows.shared.close("form")
