@@ -45,6 +45,8 @@ final class TunnelManager: ObservableObject {
         var attempt = 0
         var manualStop = false
         var restartAfterExit = false
+        /// Why the next launch happens: "start" or "retry".
+        var trigger = "start"
         var stderrTail = ""
         var retryTask: Task<Void, Never>?
         var checkTask: Task<Void, Never>?
@@ -142,6 +144,7 @@ final class TunnelManager: ObservableObject {
         r.manualStop = false
         r.restartAfterExit = false
         r.attempt = 0
+        r.trigger = "start"
         r.retryTask?.cancel()
         launch(id)
     }
@@ -149,6 +152,7 @@ final class TunnelManager: ObservableObject {
     func stop(_ id: UUID) {
         cancelOpen(id)
         guard let r = runners[id] else { return }
+        if state(for: id).isActive { log(id, "Stopped") }
         r.manualStop = true
         r.restartAfterExit = false
         r.retryTask?.cancel()
@@ -172,6 +176,7 @@ final class TunnelManager: ObservableObject {
         if r.process?.isRunning == true { return }
 
         if let reason = portBusyReason(t) {
+            log(id, "Port busy: \(reason)")
             if r.attempt == 0 {
                 setState(id, .error, error: reason)
                 r.manualStop = true
@@ -203,7 +208,8 @@ final class TunnelManager: ObservableObject {
         }
         p.terminationHandler = { [weak self] proc in
             let code = proc.terminationStatus
-            Task { @MainActor in self?.handleExit(id, proc, code: code) }
+            let bySignal = proc.terminationReason == .uncaughtSignal
+            Task { @MainActor in self?.handleExit(id, proc, code: code, bySignal: bySignal) }
         }
 
         do { try p.run() } catch {
@@ -215,6 +221,7 @@ final class TunnelManager: ObservableObject {
         r.process = p
         r.launchedAt = Date()
         r.stderrTail = ""
+        log(id, "Start (\(r.trigger)), pid \(p.processIdentifier): ssh \(ShellWords.join(args))")
         var s = state(for: id)
         s.status = r.attempt == 0 ? .starting : .reconnecting
         s.pid = p.processIdentifier
@@ -238,6 +245,7 @@ final class TunnelManager: ObservableObject {
                     s.status = .connected
                     s.openError = nil
                     self.states[id] = s
+                    self.log(id, "Connected: listening on port \(t.localPort)")
                     return
                 }
             }
@@ -247,6 +255,7 @@ final class TunnelManager: ObservableObject {
     private func appendStderr(_ id: UUID, _ text: String, from p: Process) {
         guard let r = runners[id], r.process === p else { return }
         r.stderrTail = String((r.stderrTail + text).suffix(2000))
+        log(id, text)
     }
 
     private func lastLine(_ s: String) -> String? {
@@ -255,10 +264,11 @@ final class TunnelManager: ObservableObject {
             .last { !$0.isEmpty }
     }
 
-    private func handleExit(_ id: UUID, _ p: Process, code: Int32) {
+    private func handleExit(_ id: UUID, _ p: Process, code: Int32, bySignal: Bool) {
         guard let r = runners[id], r.process === p else { return }
         r.process = nil
         r.checkTask?.cancel()
+        log(id, "ssh exited (" + (bySignal ? "signal \(code)" : "status \(code)") + ")")
         let message = lastLine(r.stderrTail) ?? "ssh exited with status \(code)"
 
         if r.manualStop {
@@ -273,7 +283,9 @@ final class TunnelManager: ObservableObject {
     private func scheduleRetry(_ id: UUID, reason: String) {
         guard let r = runners[id] else { return }
         r.attempt += 1
+        r.trigger = "retry"
         let delay = min(Self.maxBackoff, pow(2, Double(r.attempt - 1)))
+        log(id, "Retry in \(Int(delay)) s: \(reason)")
         var s = state(for: id)
         s.status = .reconnecting
         s.pid = nil
@@ -337,6 +349,26 @@ final class TunnelManager: ObservableObject {
         let deadline = Date().addingTimeInterval(1)
         while procs.contains(where: \.isRunning), Date() < deadline { usleep(50_000) }
         procs.filter(\.isRunning).forEach { kill($0.processIdentifier, SIGKILL) }
+    }
+
+    // MARK: - Logs
+
+    func logURL(for t: Tunnel) -> URL { TunnelLog(tunnelName: t.name).url }
+
+    private func log(_ id: UUID, _ text: String) {
+        guard !isDemo, let t = tunnels.first(where: { $0.id == id }) else { return }
+        TunnelLog(tunnelName: t.name).append(text)
+    }
+
+    /// Open the tunnel's log (Console), or the log folder if there is none yet.
+    func showLog(_ t: Tunnel) {
+        let url = logURL(for: t)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.open(url)
+        } else {
+            try? FileManager.default.createDirectory(at: TunnelLog.directory, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(TunnelLog.directory)
+        }
     }
 
     // MARK: - Actions

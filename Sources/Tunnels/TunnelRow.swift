@@ -99,6 +99,7 @@ struct TunnelRow: View {
                     IconButton(symbol: state.isActive ? "stop.fill" : "play.fill",
                                help: state.isActive ? "Stop" : "Start") { manager.toggle(tunnel.id) }
                     IconButton(symbol: "doc.on.doc", help: "Copy ssh command") { manager.copyCommand(tunnel) }
+                    IconButton(symbol: "doc.text.magnifyingglass", help: "Show log") { manager.showLog(tunnel) }
                     IconButton(symbol: "pencil", help: "Edit") { Windows.shared.openForm(editing: tunnel) }
                     IconButton(symbol: "trash", help: "Delete") { confirmingDelete = true }
                 }
