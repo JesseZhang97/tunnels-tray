@@ -24,14 +24,15 @@ final class ShellWordsTests: XCTestCase {
 
 final class SSHCommandTests: XCTestCase {
     let base = ["-N", "-T", "-o", "BatchMode=yes",
-                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"]
+                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+                "-o", "ConnectTimeout=10"]
 
     func testDefaultCommand() throws {
         let t = Tunnel(name: "My Web App", sshHost: "my-server", localPort: 8080, remotePort: 8080)
         XCTAssertEqual(try SSHCommand.arguments(for: t),
                        base + ["-L", "127.0.0.1:8080:127.0.0.1:8080", "my-server"])
         XCTAssertEqual(SSHCommand.commandLine(for: t),
-            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 my-server")
+            "ssh -N -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -L 127.0.0.1:8080:127.0.0.1:8080 my-server")
     }
 
     func testEmptyBind() throws {
@@ -44,11 +45,22 @@ final class SSHCommandTests: XCTestCase {
                        sshOptions: "-o serveraliveinterval=60 -C -o Compression=yes")
         XCTAssertEqual(try SSHCommand.arguments(for: t), [
             "-N", "-T", "-o", "BatchMode=yes",
-            "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10",
             "-L", "127.0.0.1:1:127.0.0.1:2",
             "-o", "serveraliveinterval=60", "-C", "-o", "Compression=yes",
             "h",
         ])
+    }
+
+    func testConnectTimeoutDefaultAndOverride() throws {
+        let t = Tunnel(name: "x", sshHost: "h", localPort: 1, remotePort: 2, sshOptions: "-o ConnectTimeout=30")
+        let args = try SSHCommand.arguments(for: t)
+        XCTAssertFalse(args.contains("ConnectTimeout=10"))
+        XCTAssertTrue(args.contains("ConnectTimeout=30"))
+        // The connection test keeps its own shorter timeout, once.
+        let plain = Tunnel(name: "y", sshHost: "h", localPort: 1, remotePort: 2)
+        XCTAssertEqual(try ConnectionTest.loginArguments(for: plain).filter { $0.hasPrefix("ConnectTimeout=") },
+                       ["ConnectTimeout=8"])
     }
 
     func testIPv6() {

@@ -52,7 +52,9 @@ public enum ConnectionTest {
     static func optionArguments(for t: Tunnel) throws -> [String] {
         let extras = try ShellWords.split(t.sshOptions)
         let userKeys = SSHOptions.userKeys(in: t.sshOptions)
-        let ours = [("ConnectTimeout", String(connectTimeout))] + SSHOptions.defaultOptions.map { ($0.key, $0.value) }
+        let ours = [("ConnectTimeout", String(connectTimeout))] + SSHOptions.defaultOptions
+            .filter { $0.key != "ConnectTimeout" }
+            .map { ($0.key, $0.value) }
         let defaults = ours
             .filter { !userKeys.contains($0.0.lowercased()) }
             .flatMap { ["-o", "\($0.0)=\($0.1)"] }
