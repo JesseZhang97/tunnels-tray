@@ -71,6 +71,9 @@ public enum PortCheck {
         #endif
         guard fd >= 0 else { return false }
         defer { close(fd) }
+        // Same as ssh's own listener: closed connections in TIME_WAIT do not block the port.
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
         let size = socklen_t(MemoryLayout<T>.size)
         return withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, size) }
@@ -99,6 +102,9 @@ public enum PortCheck {
         #endif
         guard fd >= 0 else { return String(cString: strerror(errno)) }
         defer { close(fd) }
+        // Same as ssh's own listener: closed connections in TIME_WAIT do not block the port.
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
         let size = socklen_t(MemoryLayout<T>.size)
         let rc = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, size) }

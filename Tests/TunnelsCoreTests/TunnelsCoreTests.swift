@@ -187,6 +187,36 @@ final class PortCheckTests: XCTestCase {
         XCTAssertFalse(PortCheck.acceptsConnection(address: "127.0.0.1", port: port))
         XCTAssertFalse(PortCheck.acceptsConnection(address: "not-an-ip", port: port))
     }
+
+    /// A port whose listener closed while connections were open sits in TIME_WAIT; ssh can bind it, so it is free.
+    func testTimeWaitPortIsFree() throws {
+        let server = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(server, 0)
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        addr.sin_port = 0
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(server, $0, len) } }
+        XCTAssertEqual(listen(server, 1), 0)
+        _ = withUnsafeMutablePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(server, $0, &len) } }
+        let port = Int(UInt16(bigEndian: addr.sin_port))
+
+        let client = socket(AF_INET, SOCK_STREAM, 0)
+        let rc = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, len) } }
+        XCTAssertEqual(rc, 0)
+        let accepted = accept(server, nil, nil)
+        XCTAssertGreaterThanOrEqual(accepted, 0)
+        // Server side closes first, so the TIME_WAIT entry is on the listening port.
+        close(accepted)
+        close(server)
+        usleep(100_000)
+        close(client)
+        usleep(100_000)
+
+        XCTAssertTrue(PortCheck.isFree(bindAddress: "127.0.0.1", port: port))
+    }
 }
 
 final class SSHOptionsTests: XCTestCase {
