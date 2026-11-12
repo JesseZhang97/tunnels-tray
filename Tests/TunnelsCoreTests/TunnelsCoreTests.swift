@@ -477,6 +477,29 @@ final class PortOwnerTests: XCTestCase {
     }
 }
 
+final class ChildRegistryTests: XCTestCase {
+    func testSaveLoadAndOrphanMatch() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let reg = ChildRegistry(url: dir.appendingPathComponent("children.json"))
+        XCTAssertEqual(reg.load(), [])
+        let rec = ChildRecord(tunnelID: UUID(), pid: 4242,
+                              argv: ["/usr/bin/ssh", "-N", "-L", "127.0.0.1:18399:127.0.0.1:8317", "h"],
+                              startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try reg.save([rec])
+        XCTAssertEqual(reg.load(), [rec])
+
+        let args = "/usr/bin/ssh -N -L 127.0.0.1:18399:127.0.0.1:8317 h"
+        XCTAssertTrue(ChildRegistry.isOrphan(rec, ppid: 1, args: args + "\n"))
+        XCTAssertFalse(ChildRegistry.isOrphan(rec, ppid: 777, args: args), "still has a live parent")
+        XCTAssertFalse(ChildRegistry.isOrphan(rec, ppid: 1, args: "/usr/bin/ssh -N other"), "pid reused")
+        XCTAssertFalse(ChildRegistry.isOrphan(rec, ppid: 1, args: ""))
+
+        try Data("garbage".utf8).write(to: reg.url)
+        XCTAssertEqual(reg.load(), [])
+    }
+}
+
 /// Start a shell command detached (re-parented to launchd, like a Terminal
 /// `nohup ... &` leftover) and return its pid.
 func spawnDetached(_ command: String) throws -> Int32 {
@@ -499,4 +522,35 @@ func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
         Thread.sleep(forTimeInterval: 0.1)
     }
     return condition()
+}
+
+/// A Terminal-style leftover: the tunnel's exact ssh command, started detached
+/// (parent becomes launchd). It must be classified as a stale same-forward ssh,
+/// match a registry record, and end cleanly. Uses LiveConfig (see above).
+final class LiveStaleSSHTests: XCTestCase {
+    func testLiveStaleSSHOwner() throws {
+        let cfg = try LiveConfig.load()
+        let t = Tunnel(name: "stale", sshHost: cfg.host, localPort: freeLocalPort(), remotePort: cfg.port)
+        let args = try SSHCommand.arguments(for: t)
+        let pid = try spawnDetached(ShellWords.join([SSHCommand.executable] + args))
+        defer { _ = ProcessKiller.terminate(pid: pid) }
+        XCTAssertTrue(waitUntil(timeout: 15) { !PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) })
+
+        let owner = try XCTUnwrap(PortOwners.find(tunnel: t))
+        print("LIVE stale owner: \(owner)")
+        XCTAssertEqual(owner.pid, pid)
+        XCTAssertEqual(owner.ppid, 1)
+        XCTAssertEqual(owner.kind, .staleSameForward)
+        XCTAssertFalse(owner.needsConfirmation)
+        XCTAssertEqual(PortOwners.find(tunnel: t, ownPIDs: [pid])?.kind, .ownChild)
+
+        let record = ChildRecord(tunnelID: t.id, pid: pid, argv: [SSHCommand.executable] + args)
+        let info = try XCTUnwrap(PortOwners.processInfo(pid: pid))
+        XCTAssertTrue(ChildRegistry.isOrphan(record, ppid: info.ppid, args: info.args))
+
+        let outcome = ProcessKiller.terminate(pid: pid)
+        print("LIVE stale end: \(outcome)")
+        XCTAssertEqual(outcome, .ended)
+        XCTAssertTrue(waitUntil { PortCheck.isFree(bindAddress: t.bindAddress, port: t.localPort) })
+    }
 }
