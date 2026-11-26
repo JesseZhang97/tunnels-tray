@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="build/Tunnels.app"
+APP="${BUNDLE_OUTPUT:-build/Tunnels.app}"
 
 if [[ "${1:-}" == "--universal" ]]; then
     if swift build -c release --product Tunnels --arch arm64 --arch x86_64; then
@@ -30,6 +30,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Tunnels"
 cp Support/Info.plist "$APP/Contents/Info.plist"
+cp Support/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 codesign --force --deep --sign - "$APP"
 
 echo "Built $(pwd)/$APP"
